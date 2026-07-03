@@ -99,9 +99,13 @@ async def executor_node(state: AgentState) -> dict:
     llm = get_llm()
     tools = await skill_service.list_tools_for_llm(permission="user")
 
+    # Guardrail 输入脱敏：避免 PII 泄露给 LLM
+    from app.domain.agent.guardrail import sanitize_messages, sanitize_output
+    safe_messages = sanitize_messages(state.messages)
+
     try:
         result = await llm.chat_completion(
-            messages=state.messages,
+            messages=safe_messages,
             tools=tools if tools else None,
             tool_choice="auto" if tools else None,
         )
@@ -111,6 +115,9 @@ async def executor_node(state: AgentState) -> dict:
         return {"status": AgentStatus.FAILED, "error": {"code": "LLM_ERROR", "message": str(e)}}
 
     content = result.get("content")
+    # Guardrail 输出脱敏：移除 LLM 响应中可能泄露的敏感关键词
+    if content:
+        content = sanitize_output(content)
     tool_calls = result.get("tool_calls") or []
     llm_duration_ms = int((datetime.now() - started).total_seconds() * 1000)
     state.add_event("llm_call", {"duration_ms": llm_duration_ms, "usage": result.get("usage")})

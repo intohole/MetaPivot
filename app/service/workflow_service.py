@@ -23,6 +23,9 @@ log = get_logger("workflow_service")
 class WorkflowService:
     """工作流服务单例"""
 
+    # 运行中执行任务引用（避免被GC）
+    _running_tasks: dict[str, "asyncio.Task"] = {}
+
     # ============ CRUD ============
 
     async def create_workflow(self, data: dict, created_by: str = "") -> dict:
@@ -124,7 +127,9 @@ class WorkflowService:
 
         # 异步推进（不阻塞调用方）
         import asyncio
-        asyncio.create_task(self._run_execution(execution_id, wf.definition, inputs, chat_id, user_id))
+        bg = asyncio.create_task(self._run_execution(execution_id, wf.definition, inputs, chat_id, user_id))
+        self._running_tasks[execution_id] = bg
+        bg.add_done_callback(lambda t: self._running_tasks.pop(execution_id, None))
         return {"execution_id": execution_id, "status": "pending"}
 
     async def get_execution(self, execution_id: str) -> dict:
@@ -157,10 +162,12 @@ class WorkflowService:
         # 恢复：重新加载工作流定义并从当前节点继续
         wf = await self.get_workflow(ex.workflow_id)
         import asyncio
-        asyncio.create_task(self._run_execution(
+        bg = asyncio.create_task(self._run_execution(
             execution_id, wf.definition, ex.inputs, ex.chat_id or "", ex.triggered_by or "",
             resume_from=ex.current_node, context_mod=modifications,
         ))
+        self._running_tasks[execution_id] = bg
+        bg.add_done_callback(lambda t: self._running_tasks.pop(execution_id, None))
         return {"execution_id": execution_id, "status": "running"}
 
     # ============ 内部：DAG 推进 ============

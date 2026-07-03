@@ -62,6 +62,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 限流中间件（Redis 令牌桶，按 IP + 路径维度）
+from app.middleware.rate_limit import RateLimitMiddleware  # noqa: E402
+app.add_middleware(RateLimitMiddleware)
+
 
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):

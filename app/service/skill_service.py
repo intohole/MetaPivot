@@ -145,11 +145,11 @@ class SkillService:
         return result
 
     async def test_skill(self, skill_id: str, args: dict) -> dict:
-        """测试 Skill（不写审计，用于管理后台）"""
+        """测试 Skill（不写审计、不增加 call_count，用于管理后台）"""
         from datetime import datetime
         started = datetime.now()
         try:
-            result = await self.execute(skill_id, args, user_id="test")
+            result = await self._execute_raw(skill_id, args)
             duration = int((datetime.now() - started).total_seconds() * 1000)
             return {
                 "success": "error" not in result,
@@ -159,6 +159,28 @@ class SkillService:
             }
         except AppError as e:
             return {"success": False, "error": {"code": e.code, "message": e.message}, "duration_ms": 0}
+
+    async def _execute_raw(self, skill_id: str, args: dict) -> dict:
+        """执行 Skill 但不写审计、不增加 call_count（测试用）"""
+        skill = await self.get_skill(skill_id)
+        if not skill.enabled:
+            raise AppError(ErrorCode.SKILL_DISABLED, status_code=403)
+        if skill.source_type == "function":
+            from app.infra.tools.registry import call_function
+            return await call_function(skill.source_ref, args)
+        elif skill.source_type == "mcp":
+            from app.infra.mcp.client import mcp_client
+            parts = skill.source_ref.split(".", 1)
+            if len(parts) != 2:
+                raise AppError(ErrorCode.SKILL_EXECUTION_FAILED, "MCP source_ref 格式错误")
+            return await mcp_client.call(parts[0], parts[1], args)
+        elif skill.source_type == "workflow":
+            from app.service.workflow_service import workflow_service
+            wf_result = await workflow_service.execute_workflow(
+                workflow_id=skill.source_ref, inputs=args, user_id="test"
+            )
+            return {"execution_id": wf_result.get("execution_id")}
+        raise AppError(ErrorCode.SKILL_EXECUTION_FAILED, f"未知 source_type: {skill.source_type}")
 
     # ============ Agent 工具列表 ============
 

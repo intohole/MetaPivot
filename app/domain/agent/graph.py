@@ -156,7 +156,11 @@ async def resume_agent(state: AgentState) -> AsyncGenerator[dict, None]:
 
 
 async def _advance(node_fn, state: AgentState) -> AgentState:
-    """执行单个节点，应用返回的状态更新"""
+    """执行单个节点，应用返回的状态更新
+
+    约定：节点返回 dict，其中 list 字段必须返回完整列表（而非增量），
+    _advance 直接 setattr 替换。这避免了脆弱的"首元素是否在旧列表"判断。
+    """
     try:
         update = await asyncio.wait_for(node_fn(state), timeout=_STEP_TIMEOUT)
     except asyncio.TimeoutError:
@@ -167,16 +171,7 @@ async def _advance(node_fn, state: AgentState) -> AgentState:
     if isinstance(update, dict):
         for k, v in update.items():
             if hasattr(state, k):
-                # list 字段做合并而非覆盖（保留历史）
-                current = getattr(state, k)
-                if isinstance(current, list) and isinstance(v, list):
-                    # 列表合并：如果新值是完整列表（包含旧值），直接替换
-                    if v and v[0] in current:
-                        setattr(state, k, v)
-                    else:
-                        setattr(state, k, current + v)
-                else:
-                    setattr(state, k, v)
+                setattr(state, k, v)
     return state
 
 

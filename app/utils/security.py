@@ -13,10 +13,10 @@ from app.utils.config import settings
 # 密码哈希
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# 脱敏正则
+# 脱敏正则（注意顺序：长模式优先，避免短模式先行匹配导致部分脱敏）
 _DESENSITIZE_PATTERNS = [
-    (re.compile(r"1[3-9]\d{9}"), "phone"),                            # 手机号
-    (re.compile(r"\d{15}|\d{18}"), "id_card"),                        # 身份证
+    (re.compile(r"\b\d{17}[\dXx]\b"), "id_card"),                          # 18位身份证（末位X/x）
+    (re.compile(r"\b1[3-9]\d{9}\b"), "phone"),                              # 手机号
     (re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"), "email"),  # 邮箱
 ]
 

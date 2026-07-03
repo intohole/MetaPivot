@@ -103,15 +103,19 @@ class AgentService:
             await update_task_status(task_id, "failed", None, state.error)
         finally:
             stream_manager.mark_finished(task_id)
-            asyncio.get_event_loop().call_later(300, stream_manager.cleanup, task_id)
+            # 延迟清理（保留历史事件5分钟供后续订阅）
+            asyncio.get_running_loop().call_later(300, stream_manager.cleanup, task_id)
 
     # ============ 查询 ============
 
-    async def get_task(self, task_id: str) -> dict:
+    async def get_task(self, task_id: str, user_id: str = "") -> dict:
         async with get_db_session() as session:
             task = await session.get(AgentTaskORM, task_id)
             if task is None:
                 raise AppError(ErrorCode.AGENT_TASK_NOT_FOUND, status_code=404)
+            # 越权防护：仅任务发起人可查询（admin 由路由层 require_permission 放行）
+            if user_id and task.user_id and task.user_id != user_id:
+                raise AppError(ErrorCode.AUTH_PERMISSION_DENIED, "无权访问该任务", 403)
             steps = (await session.execute(
                 select(AgentTaskStepORM)
                 .where(AgentTaskStepORM.task_id == task_id)
@@ -127,12 +131,14 @@ class AgentService:
                 "error": task.error,
             }
 
-    async def stream_task(self, task_id: str) -> AsyncGenerator[dict, None]:
+    async def stream_task(self, task_id: str, user_id: str = "") -> AsyncGenerator[dict, None]:
         """SSE 订阅任务事件流"""
         async with get_db_session() as session:
             task = await session.get(AgentTaskORM, task_id)
             if task is None:
                 raise AppError(ErrorCode.AGENT_TASK_NOT_FOUND, status_code=404)
+            if user_id and task.user_id and task.user_id != user_id:
+                raise AppError(ErrorCode.AUTH_PERMISSION_DENIED, "无权访问该任务", 403)
 
         queue = stream_manager.subscribe(task_id)
         try:
@@ -203,7 +209,7 @@ class AgentService:
         bg = self._running_tasks.pop(task_id, None)
         if bg and not bg.done():
             bg.cancel()
-        stream_manager.publish(task_id, {"type": "cancelled", "data": {}})
+        await stream_manager.publish(task_id, {"type": "cancelled", "data": {}})
         stream_manager.mark_finished(task_id)
         return {"task_id": task_id, "status": "cancelled"}
 

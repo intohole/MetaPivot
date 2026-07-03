@@ -14,7 +14,7 @@ router = APIRouter()
 
 class ChatRequest(BaseModel):
     """Agent 对话请求"""
-    message: str = Field(..., description="用户消息")
+    message: str = Field(..., min_length=1, max_length=10000, description="用户消息")
     channel: str = Field(default="api", description="消息来源渠道")
     chat_id: str = Field(default="", description="会话ID")
     user_id: str = Field(default="", description="调用方用户ID（IM场景）")
@@ -55,9 +55,11 @@ async def get_task(
     request: Request,
     user: CurrentUser = Depends(get_current_user),
 ):
-    """查询 Agent 任务状态、结果、步骤"""
+    """查询 Agent 任务状态、结果、步骤（仅任务发起人或 admin）"""
     from app.service.agent_service import agent_service
-    return ok(await agent_service.get_task(task_id), request)
+    # admin 可查所有任务，普通用户仅查自己的
+    caller_uid = "" if user.role == "admin" else user.user_id
+    return ok(await agent_service.get_task(task_id, caller_uid), request)
 
 
 @router.get("/tasks/{task_id}/stream", summary="任务流式订阅")
@@ -65,9 +67,10 @@ async def stream_task(
     task_id: str,
     user: CurrentUser = Depends(get_current_user),
 ):
-    """SSE 订阅任务步骤事件"""
+    """SSE 订阅任务步骤事件（仅任务发起人或 admin）"""
     from app.service.agent_service import agent_service
-    return EventSourceResponse(agent_service.stream_task(task_id))
+    caller_uid = "" if user.role == "admin" else user.user_id
+    return EventSourceResponse(agent_service.stream_task(task_id, caller_uid))
 
 
 @router.post("/tasks/{task_id}/confirm", summary="人工确认")
