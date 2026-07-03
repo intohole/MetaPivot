@@ -1,0 +1,231 @@
+# MetaPivot - 企业IM自动化办公服务 API接入说明 v1.0
+
+> 企业内部多IM(钉钉/企微/飞书)渠道自动化办公服务，提供超级Agent自主执行、可视化工作流编排、MCP/Skill能力体系
+
+Base: http://localhost:8000
+Version: 1.0.0
+
+## 认证
+- JWT: `Authorization: Bearer <token>`
+- 获取方式: `POST /api/v1/auth/token` Body: `{username*:string, password*:string}` 200: `{token:string, expires_in:integer}`
+- API Key (IM回调): `X-API-Key: <key>` 用于Webhook端点
+- IM签名校验: 钉钉/飞书/企微各自签名头校验
+
+## 约定
+- `*` 标记必填字段
+- 所有字段string除非标注类型(integer/boolean/array/object)
+- 统一错误: `{success:boolean=false, error:{code:string, message:string, request_id:string}}`
+- 成功响应: `{success:boolean=true, data:object, request_id:string}`
+- 分页: `?page=1&page_size=20` 响应: `{items:array, total:integer, page:integer, page_size:integer}`
+- 异步任务: 立即返回`{task_id:string, status:"pending"}`，通过`GET /api/v1/agent/tasks/{task_id}`轮询或`GET /api/v1/agent/tasks/{task_id}/stream`订阅SSE
+- 所有时间字段ISO8601格式
+
+## 错误码
+- AUTH_INVALID_CREDENTIALS: 认证失败
+- AUTH_PERMISSION_DENIED: 权限不足
+- AGENT_MAX_STEPS: Agent达到最大步数
+- AGENT_HUMAN_REJECTED: 人工确认被拒绝
+- SKILL_NOT_FOUND: Skill不存在
+- SKILL_DISABLED: Skill已禁用
+- WORKFLOW_INVALID: 工作流定义无效
+- RATE_LIMITED: 频率限制
+- IM_CHANNEL_ERROR: IM渠道错误
+- INTERNAL_ERROR: 内部错误
+
+---
+
+## 认证组
+
+### POST /api/v1/auth/token - 获取JWT令牌
+Body: `{username*:string, password*:string}`
+200: `{token:string, token_type:string="Bearer", expires_in:integer=3600, user:object}`
+401: AUTH_INVALID_CREDENTIALS
+
+### POST /api/v1/auth/refresh - 刷新令牌 | JWT
+Body: `{}`
+200: `{token:string, expires_in:integer}`
+
+---
+
+## IM接入组（Webhook回调，无需JWT，需IM签名校验）
+
+### POST /api/v1/im/dingtalk/webhook - 钉钉消息回调 | 签名校验
+Headers: `timestamp*:string, sign*:string`
+Body: `{conversationId:string, atUsers:array, text:object, msgId:string, senderId:string, senderNick:string, sessionWebhook:string, isAdmin:boolean=false}`
+200: `{msgtype:string="text", text:object}` (钉钉要求返回文本结构)
+注: 钉钉Stream模式由内部SDK建立WebSocket连接，无需此端点；此端点用于HTTP模式或卡片回调
+
+### POST /api/v1/im/dingtalk/card/callback - 钉钉卡片回调 | 签名校验
+Body: `{type:string="actionCallback", outTrackId:string, corpId:string, userId:string, content:string}`
+200: `{status:string="SUCCESS"}`
+
+### GET /api/v1/im/wecom/callback - 企微验证URL | 签名校验
+Params: `msg_signature*:string, timestamp*:string, nonce*:string, echostr*:string`
+200: `text/plain` (返回解密后的echostr)
+
+### POST /api/v1/im/wecom/callback - 企微消息回调 | 签名校验
+Headers: `msg_signature*:string, timestamp*:string, nonce*:string`
+Body: `application/xml` (加密的XML)
+200: `application/xml` (加密的XML响应)
+
+### POST /api/v1/im/feishu/webhook - 飞书事件回调 | 签名校验
+Headers: `X-Lark-Request-Timestamp*:string, X-Lark-Request-Nonce*:string, X-Lark-Signature*:string`
+Body: `{challenge:string, header:object, event:object}`
+200: `{challenge:string}` (URL验证) 或 `{code:integer=0}` (事件确认)
+
+---
+
+## Agent组
+
+### POST /api/v1/agent/chat - Agent对话 | JWT
+Body: `{message*:string, channel?:string="api", chat_id?:string, user_id?:string, context?:object, stream?:boolean=false}`
+202: `{task_id:string, status:string="pending", stream_url:string}`
+注: stream=true时返回SSE流，否则返回task_id异步处理
+
+### GET /api/v1/agent/tasks/{task_id} - 查询任务状态 | JWT
+200: `{task_id:string, status:string, result:object, steps:array, created_at:string, updated_at:string, error:object}`
+status枚举: pending/planning/executing/waiting_confirm/completed/failed
+
+### GET /api/v1/agent/tasks/{task_id}/stream - 任务流式订阅 | JWT
+Response: `text/event-stream` (SSE)
+Events: `step_started`, `step_completed`, `tool_call`, `human_confirm_required`, `final_result`, `error`
+
+### POST /api/v1/agent/tasks/{task_id}/confirm - 人工确认 | JWT
+Body: `{decision*:string="approve"|"reject"|"modify", modifications?:object}`
+200: `{task_id:string, status:string="executing"}`
+注: decision=modify时modifications必填
+
+### POST /api/v1/agent/tasks/{task_id}/cancel - 取消任务 | JWT
+200: `{task_id:string, status:string="cancelled"}`
+
+---
+
+## 工作流组
+
+### POST /api/v1/workflows - 创建工作流 | JWT(需admin)
+Body: `{name*:string, description?:string, definition*:object, trigger?:object, enabled?:boolean=true}`
+definition: `{nodes:array, edges:array, variables:array}`
+200: `{id:string, name:string, status:string, created_at:string}`
+
+### GET /api/v1/workflows - 工作流列表 | JWT
+Params: `?page=integer=1&page_size=integer=20&enabled=boolean&keyword=string`
+200: `{items:array, total:integer, page:integer, page_size:integer}`
+
+### GET /api/v1/workflows/{workflow_id} - 工作流详情 | JWT
+200: `{id:string, name:string, description:string, definition:object, trigger:object, enabled:boolean, version:integer, created_at:string, updated_at:string}`
+
+### PUT /api/v1/workflows/{workflow_id} - 更新工作流 | JWT(需admin)
+Body: `{name?:string, description?:string, definition?:object, trigger?:object, enabled?:boolean}`
+200: `{id:string, updated_at:string}`
+
+### DELETE /api/v1/workflows/{workflow_id} - 删除工作流 | JWT(需admin)
+200: `{id:string, deleted:boolean=true}`
+
+### POST /api/v1/workflows/{workflow_id}/execute - 执行工作流 | JWT
+Body: `{inputs?:object, chat_id?:string, user_id?:string}`
+202: `{execution_id:string, status:string="pending"}`
+
+### GET /api/v1/workflows/executions/{execution_id} - 执行状态 | JWT
+200: `{execution_id:string, workflow_id:string, status:string, current_node:string, inputs:object, outputs:object, started_at:string, finished_at:string, error:object}`
+status枚举: pending/running/paused/completed/failed/cancelled
+
+---
+
+## Skill管理组
+
+### POST /api/v1/skills - 创建Skill | JWT(需admin)
+Body: `{name*:string, description*:string, input_schema*:object, source_type*:string="mcp"|"function"|"workflow", source_ref*:string, permission?:string, require_confirm?:boolean=false, tags?:array}`
+200: `{id:string, name:string, enabled:boolean=true, created_at:string}`
+
+### GET /api/v1/skills - Skill列表 | JWT
+Params: `?page=integer&page_size=integer&enabled=boolean&source_type=string&keyword=string`
+200: `{items:array, total:integer, page:integer, page_size:integer}`
+
+### GET /api/v1/skills/{skill_id} - Skill详情 | JWT
+200: `{id:string, name:string, description:string, input_schema:object, source_type:string, source_ref:string, permission:string, require_confirm:boolean, enabled:boolean, call_count:integer, created_at:string}`
+
+### PUT /api/v1/skills/{skill_id} - 更新Skill | JWT(需admin)
+Body: `{name?:string, description?:string, input_schema?:object, permission?:string, require_confirm?:boolean, tags?:array}`
+200: `{id:string, updated_at:string}`
+
+### DELETE /api/v1/skills/{skill_id} - 删除Skill | JWT(需admin)
+200: `{id:string, deleted:boolean=true}`
+
+### POST /api/v1/skills/{skill_id}/enable - 启用Skill | JWT(需admin)
+200: `{id:string, enabled:boolean=true}`
+
+### POST /api/v1/skills/{skill_id}/disable - 禁用Skill | JWT(需admin)
+200: `{id:string, enabled:boolean=false}`
+
+### POST /api/v1/skills/{skill_id}/test - 测试Skill | JWT
+Body: `{input:object}`
+200: `{success:boolean, result:object, duration_ms:integer, error:object}`
+
+---
+
+## 知识库组
+
+### POST /api/v1/knowledge/documents - 上传文档 | JWT
+Body: `multipart/form-data` (file + metadata)
+200: `{id:string, filename:string, status:string="processing", chunk_count:integer}`
+
+### GET /api/v1/knowledge/documents - 文档列表 | JWT
+Params: `?page=integer&page_size=integer&status=string`
+200: `{items:array, total:integer, page:integer, page_size:integer}`
+
+### DELETE /api/v1/knowledge/documents/{document_id} - 删除文档 | JWT
+200: `{id:string, deleted:boolean=true}`
+
+### POST /api/v1/knowledge/search - 知识库检索 | JWT
+Body: `{query*:string, top_k?:integer=5, score_threshold?:number=0.7, filter?:object}`
+200: `{results:array<{document_id:string, content:string, score:number, metadata:object}>, total:integer}`
+
+---
+
+## 审计组
+
+### GET /api/v1/audit/logs - 审计日志查询 | JWT(需admin)
+Params: `?page=integer&page_size=integer&user_id=string&action=string&skill_id=string&start_time=string&end_time=string`
+200: `{items:array<{id:string, user_id:string, action:string, skill_id:string, input_hash:string, output_summary:string, duration_ms:integer, status:string, created_at:string}>, total:integer, page:integer, page_size:integer}`
+
+### GET /api/v1/audit/stats - 审计统计 | JWT(需admin)
+Params: `?start_time=string&end_time=string&group_by=string="day"|"user"|"skill"`
+200: `{stats:array<{key:string, count:integer, success_rate:number, avg_duration_ms:integer}>, total:integer}`
+
+---
+
+## 管理组
+
+### GET /api/v1/users - 用户列表 | JWT(需admin)
+Params: `?page=integer&page_size=integer&keyword=string&role=string`
+200: `{items:array<{id:string, username:string, role:string, im_accounts:object, status:string, created_at:string}>, total:integer}`
+
+### POST /api/v1/users - 创建用户 | JWT(需admin)
+Body: `{username*:string, password*:string, role*:string="user"|"admin"|"manager", im_accounts?:object}`
+200: `{id:string, username:string, role:string, created_at:string}`
+
+### PUT /api/v1/users/{user_id} - 更新用户 | JWT(需admin)
+Body: `{password?:string, role?:string, im_accounts?:object, status?:string}`
+200: `{id:string, updated_at:string}`
+
+### GET /api/v1/roles - 角色列表 | JWT
+200: `{items:array<{id:string, name:string, permissions:array, description:string}>}`
+
+### GET /api/v1/configs - 配置列表 | JWT(需admin)
+Params: `?category=string`
+200: `{items:array<{key:string, value:string, category:string, description:string, updatable:boolean}>}`
+
+### PUT /api/v1/configs/{key} - 更新配置 | JWT(需admin)
+Body: `{value*:string}`
+200: `{key:string, value:string, updated_at:string}`
+
+---
+
+## 健康检查
+
+### GET /health - 健康检查 | 无需认证
+200: `{status:string="healthy", version:string, uptime:integer, components:object}`
+
+### GET /ready - 就绪检查 | 无需认证
+200: `{status:string="ready", dependencies:object}`
+503: `{status:string="not_ready", dependencies:object}`

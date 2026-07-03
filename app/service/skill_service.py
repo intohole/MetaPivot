@@ -1,0 +1,239 @@
+"""SkillService - Skill 注册、查询、执行、给 Agent 提供 LLM 工具列表
+
+职责：
+1. Skill CRUD（持久化到 PostgreSQL）
+2. 按 source_type 路由执行：function → call_function / mcp → mcp_client / workflow → workflow_service
+3. 生成 LLM 可用的 tools 列表（OpenAI Function Call 格式）
+4. 调用计数与审计
+
+依赖方向：Service → Infra（MCPClient/call_function）+ Data（ORM）
+"""
+from datetime import datetime
+from typing import Optional
+
+from sqlalchemy import func, select
+
+from app.infra.db.models_user_skill import SkillORM
+from app.infra.db.session import get_db_session
+from app.utils.logger import get_logger
+from app.utils.response import AppError, ErrorCode
+
+log = get_logger("skill_service")
+
+
+class SkillService:
+    """Skill 服务单例"""
+
+    # 工具名黑名单前缀（避免 LLM 误调用内部工具）
+    _RESERVED_PREFIX = "_"
+
+    async def create_skill(self, data: dict) -> dict:
+        """创建 Skill"""
+        async with get_db_session() as session:
+            exists = await session.execute(select(SkillORM).where(SkillORM.name == data["name"]))
+            if exists.scalar_one_or_none():
+                raise AppError(ErrorCode.VALIDATION_ERROR, "Skill 名称已存在", 409)
+            self._validate(data)
+            skill = SkillORM(**data)
+            session.add(skill)
+            await session.flush()
+            log.info("Skill created: {} ({})", skill.name, skill.source_type)
+            return self._to_dict(skill)
+
+    async def list_skills(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        enabled: Optional[bool] = None,
+        source_type: Optional[str] = None,
+        keyword: str = "",
+    ) -> tuple[list[SkillORM], int]:
+        """分页查询"""
+        async with get_db_session() as session:
+            stmt = select(SkillORM)
+            if enabled is not None:
+                stmt = stmt.where(SkillORM.enabled == enabled)
+            if source_type:
+                stmt = stmt.where(SkillORM.source_type == source_type)
+            if keyword:
+                stmt = stmt.where(SkillORM.name.ilike(f"%{keyword}%"))
+            count_stmt = select(func.count()).select_from(stmt.subquery())
+            total = (await session.execute(count_stmt)).scalar() or 0
+            stmt = stmt.order_by(SkillORM.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+            items = (await session.execute(stmt)).scalars().all()
+            return items, total
+
+    async def get_skill(self, skill_id: str) -> SkillORM:
+        async with get_db_session() as session:
+            skill = await session.get(SkillORM, skill_id)
+            if skill is None:
+                raise AppError(ErrorCode.SKILL_NOT_FOUND, status_code=404)
+            return skill
+
+    async def update_skill(self, skill_id: str, update_data: dict) -> dict:
+        async with get_db_session() as session:
+            skill = await session.get(SkillORM, skill_id)
+            if skill is None:
+                raise AppError(ErrorCode.SKILL_NOT_FOUND, status_code=404)
+            for k, v in update_data.items():
+                if hasattr(skill, k) and v is not None:
+                    setattr(skill, k, v)
+            await session.flush()
+            return {"id": skill.id, "updated_at": skill.updated_at.isoformat() if skill.updated_at else None}
+
+    async def delete_skill(self, skill_id: str) -> dict:
+        async with get_db_session() as session:
+            skill = await session.get(SkillORM, skill_id)
+            if skill is None:
+                raise AppError(ErrorCode.SKILL_NOT_FOUND, status_code=404)
+            await session.delete(skill)
+            return {"id": skill_id, "deleted": True}
+
+    async def set_enabled(self, skill_id: str, enabled: bool) -> dict:
+        async with get_db_session() as session:
+            skill = await session.get(SkillORM, skill_id)
+            if skill is None:
+                raise AppError(ErrorCode.SKILL_NOT_FOUND, status_code=404)
+            skill.enabled = enabled
+            await session.flush()
+            return {"id": skill.id, "enabled": skill.enabled}
+
+    # ============ 执行 ============
+
+    async def execute(self, skill_id: str, args: dict, user_id: str = "") -> dict:
+        """执行 Skill，按 source_type 路由"""
+        skill = await self.get_skill(skill_id)
+        if not skill.enabled:
+            raise AppError(ErrorCode.SKILL_DISABLED, status_code=403)
+
+        started = datetime.now()
+        result: dict
+        try:
+            if skill.source_type == "function":
+                from app.infra.tools.registry import call_function
+                result = await call_function(skill.source_ref, args)
+            elif skill.source_type == "mcp":
+                from app.infra.mcp.client import mcp_client
+                # source_ref 格式：mcp_server_name.tool_name
+                parts = skill.source_ref.split(".", 1)
+                if len(parts) != 2:
+                    raise AppError(ErrorCode.SKILL_EXECUTION_FAILED, "MCP source_ref 格式错误")
+                result = await mcp_client.call(parts[0], parts[1], args)
+            elif skill.source_type == "workflow":
+                from app.service.workflow_service import workflow_service
+                wf_result = await workflow_service.execute_workflow(
+                    workflow_id=skill.source_ref, inputs=args, user_id=user_id
+                )
+                result = {"execution_id": wf_result.get("execution_id")}
+            else:
+                raise AppError(ErrorCode.SKILL_EXECUTION_FAILED, f"未知 source_type: {skill.source_type}")
+        except AppError:
+            raise
+        except Exception as e:
+            log.exception("Skill execute failed: {}", skill.name)
+            result = {"error": str(e)}
+
+        duration = int((datetime.now() - started).total_seconds() * 1000)
+        await self._incr_call_count(skill_id)
+        # 写审计
+        from app.service.audit_service import audit_service
+        await audit_service.log_action(
+            user_id=user_id, action="skill.call", skill_id=skill_id,
+            input_data=args, output_data=result, duration_ms=duration,
+            status="success" if "error" not in result else "failed",
+        )
+        return result
+
+    async def test_skill(self, skill_id: str, args: dict) -> dict:
+        """测试 Skill（不写审计，用于管理后台）"""
+        from datetime import datetime
+        started = datetime.now()
+        try:
+            result = await self.execute(skill_id, args, user_id="test")
+            duration = int((datetime.now() - started).total_seconds() * 1000)
+            return {
+                "success": "error" not in result,
+                "result": result,
+                "duration_ms": duration,
+                "error": result.get("error"),
+            }
+        except AppError as e:
+            return {"success": False, "error": {"code": e.code, "message": e.message}, "duration_ms": 0}
+
+    # ============ Agent 工具列表 ============
+
+    async def list_tools_for_llm(self, permission: str = "user") -> list[dict]:
+        """生成 LLM tools 列表（OpenAI Function Call 格式）
+
+        仅返回 enabled 且权限匹配的 Skill。
+        """
+        async with get_db_session() as session:
+            stmt = select(SkillORM).where(SkillORM.enabled == True)  # noqa: E712
+            skills = (await session.execute(stmt)).scalars().all()
+
+        tools: list[dict] = []
+        for s in skills:
+            if s.name.startswith(self._RESERVED_PREFIX):
+                continue
+            if not self._permission_allowed(s.permission, permission):
+                continue
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": s.name,
+                    "description": s.description,
+                    "parameters": s.input_schema or {"type": "object", "properties": {}},
+                },
+                "metadata": {
+                    "skill_id": s.id,
+                    "source_type": s.source_type,
+                    "require_confirm": s.require_confirm,
+                },
+            })
+        return tools
+
+    async def find_skill_id_by_name(self, name: str) -> Optional[str]:
+        async with get_db_session() as session:
+            stmt = select(SkillORM.id).where(SkillORM.name == name, SkillORM.enabled == True)  # noqa: E712
+            return (await session.execute(stmt)).scalar_one_or_none()
+
+    # ============ 内部工具 ============
+
+    def _validate(self, data: dict) -> None:
+        if data.get("source_type") not in ("mcp", "function", "workflow"):
+            raise AppError(ErrorCode.VALIDATION_ERROR, "source_type 必须为 mcp/function/workflow", 400)
+        if not data.get("source_ref"):
+            raise AppError(ErrorCode.VALIDATION_ERROR, "source_ref 不能为空", 400)
+        if not data.get("input_schema"):
+            raise AppError(ErrorCode.VALIDATION_ERROR, "input_schema 不能为空", 400)
+
+    def _permission_allowed(self, skill_perm: str, user_role: str) -> bool:
+        """简单权限匹配：admin 可调所有，manager 可调 user/manager 级，user 只能调 user 级"""
+        if skill_perm == "user":
+            return True
+        if skill_perm == "manager" and user_role in ("manager", "admin"):
+            return True
+        if skill_perm == "admin" and user_role == "admin":
+            return True
+        return False
+
+    async def _incr_call_count(self, skill_id: str) -> None:
+        from sqlalchemy import update
+        async with get_db_session() as session:
+            await session.execute(
+                update(SkillORM)
+                .where(SkillORM.id == skill_id)
+                .values(call_count=SkillORM.call_count + 1, last_called_at=datetime.now())
+            )
+
+    def _to_dict(self, s: SkillORM) -> dict:
+        return {
+            "id": s.id, "name": s.name, "description": s.description,
+            "input_schema": s.input_schema, "source_type": s.source_type,
+            "source_ref": s.source_ref, "permission": s.permission,
+            "require_confirm": s.require_confirm, "tags": s.tags,
+            "enabled": s.enabled, "created_at": s.created_at.isoformat() if s.created_at else None,
+        }
+
+
+skill_service = SkillService()
