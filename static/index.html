@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="MetaPivot 企业IM自动化办公服务管理后台" />
+  <title>MetaPivot 管理后台</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: { DEFAULT: 'var(--color-brand)', dark: 'var(--color-brand-dark)', light: 'var(--color-brand-light)' },
+            surface: { DEFAULT: 'var(--color-surface)', muted: 'var(--color-surface-muted)', elevated: 'var(--color-surface-elevated)' },
+            ink: { DEFAULT: 'var(--color-text)', muted: 'var(--color-text-muted)', subtle: 'var(--color-text-subtle)' },
+            border: { DEFAULT: 'var(--color-border)', strong: 'var(--color-border-strong)' }
+          },
+          fontFamily: { sans: ['Inter', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'] }
+        }
+      }
+    }
+  </script>
+  <!-- Vue 3 生产版（国内 CDN） -->
+  <script src="https://cdn.bootcdn.net/ajax/libs/vue/3.4.21/vue.global.prod.min.js" crossorigin="anonymous"></script>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+<body class="bg-surface-muted text-ink antialiased">
+  <noscript>
+    <div class="flex items-center justify-center min-h-screen text-center p-8">
+      <div>
+        <h1 class="text-2xl font-bold mb-2">需要启用 JavaScript</h1>
+        <p class="text-ink-muted">MetaPivot 管理后台依赖 JavaScript 运行，请在浏览器设置中启用。</p>
+      </div>
+    </div>
+  </noscript>
+  <div id="app"></div>
+  <!-- 基础依赖（顺序加载） -->
+  <script src="/static/js/store.js"></script>
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/components.js"></script>
+  <!-- 业务页面组件 -->
+  <script src="/static/js/pages/login.js"></script>
+  <script src="/static/js/pages/dashboard.js"></script>
+  <script src="/static/js/pages/agent.js"></script>
+  <script src="/static/js/pages/skills.js"></script>
+  <script src="/static/js/pages/workflows.js"></script>
+  <script src="/static/js/pages/knowledge.js"></script>
+  <script src="/static/js/pages/audit.js"></script>
+  <script src="/static/js/pages/users.js"></script>
+  <script src="/static/js/pages/channels.js"></script>
+  <script src="/static/js/pages/configs.js"></script>
+  <!-- 应用主入口（最后加载） -->
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

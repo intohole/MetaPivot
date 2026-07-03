@@ -13,7 +13,7 @@
 import asyncio
 from typing import AsyncGenerator
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.domain.agent.graph import resume_agent, run_agent
 from app.domain.agent.state import AgentState, AgentStatus
@@ -107,6 +107,35 @@ class AgentService:
             asyncio.get_running_loop().call_later(300, stream_manager.cleanup, task_id)
 
     # ============ 查询 ============
+
+    async def list_tasks(
+        self, page: int = 1, page_size: int = 20,
+        user_id: str = "", status: str = "",
+    ) -> tuple[list[dict], int]:
+        """查询任务列表（user_id 为空时返回全部，admin 场景）"""
+        async with get_db_session() as session:
+            stmt = select(AgentTaskORM)
+            if user_id:
+                stmt = stmt.where(AgentTaskORM.user_id == user_id)
+            if status:
+                stmt = stmt.where(AgentTaskORM.status == status)
+            total = (await session.execute(
+                select(func.count()).select_from(stmt.subquery())
+            )).scalar() or 0
+            stmt = (stmt.order_by(AgentTaskORM.created_at.desc())
+                    .offset((page - 1) * page_size).limit(page_size))
+            items = (await session.execute(stmt)).scalars().all()
+            return [self._task_summary(t) for t in items], total
+
+    @staticmethod
+    def _task_summary(t: AgentTaskORM) -> dict:
+        """任务列表项摘要（不含 steps，减少传输量）"""
+        return {
+            "task_id": t.id, "status": t.status, "channel": t.channel,
+            "user_id": t.user_id, "result": t.result,
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+        }
 
     async def get_task(self, task_id: str, user_id: str = "") -> dict:
         async with get_db_session() as session:

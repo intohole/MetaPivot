@@ -82,6 +82,11 @@ Body: `{message*:string, channel?:string="api", chat_id?:string, user_id?:string
 202: `{task_id:string, status:string="pending", stream_url:string}`
 注: stream=true时返回SSE流，否则返回task_id异步处理
 
+### GET /api/v1/agent/tasks - 任务列表 | JWT
+Params: `?page=integer=1&page_size=integer=20&status=string`
+200: `{items:array<{task_id:string, status:string, channel:string, user_id:string, result:object, created_at:string, updated_at:string}>, total:integer, page:integer, page_size:integer}`
+注: admin可查所有任务，普通用户仅查自己的
+
 ### GET /api/v1/agent/tasks/{task_id} - 查询任务状态 | JWT
 200: `{task_id:string, status:string, result:object, steps:array, created_at:string, updated_at:string, error:object}`
 status枚举: pending/planning/executing/waiting_confirm/completed/failed
