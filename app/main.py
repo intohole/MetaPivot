@@ -22,10 +22,27 @@ async def lifespan(app: FastAPI):
     setup_logger()
     log.info("Starting {} v{} ...", settings.app_name, settings.app_version)
 
+    # 启动前配置校验（不阻断，仅 WARNING 日志）
+    from app.utils.config_validator import validate_config
+    await validate_config()
+
     # 初始化数据库
     await init_db()
+
+    # 任务恢复：将上次崩溃时未完成的任务标记为 failed/cancelled
+    from app.service.task_recovery import recover_stuck_tasks
+    recovered = await recover_stuck_tasks()
+    if recovered:
+        log.info("Recovered {} stuck tasks from previous run", recovered)
+
     # 初始化Redis
     await init_redis()
+    # 初始化事件总线（Local 单机 / Redis 集群，跟随 CACHE_BACKEND）
+    # 通过 DI 注入到 StreamManager，避免 Domain 层直接依赖 Infra
+    from app.infra.event.factory import init_event_bus
+    from app.domain.agent.stream import stream_manager
+    bus = await init_event_bus()
+    stream_manager.set_bus(bus)
     # 注册 IM 消息处理器（桥接 ChannelService ↔ AgentService）
     from app.service.message_handler import register_to_channel_service
     await register_to_channel_service()
@@ -37,10 +54,12 @@ async def lifespan(app: FastAPI):
     log.info("{} started on port {}", settings.app_name, settings.app_port)
     yield
 
-    # 关闭
+    # 优雅关闭：取消在途任务 → 停 IM → 释放 DB/cache/event_bus
     log.info("Shutting down {}...", settings.app_name)
-    from app.service.channel_manager import stop_channels
-    await stop_channels()
+    from app.service.shutdown import graceful_shutdown
+    await graceful_shutdown()
+    from app.infra.event.factory import close_event_bus
+    await close_event_bus()
     await close_db()
     await close_redis()
     log.info("{} stopped", settings.app_name)
@@ -120,7 +139,9 @@ async def readiness():
     db_ok = await check_db_health()
     from app.infra.cache.factory import check_cache_health
     cache_ok = await check_cache_health()
-    ready = db_ok and cache_ok
+    from app.infra.event.factory import check_event_bus_health
+    bus_ok = await check_event_bus_health()
+    ready = db_ok and cache_ok and bus_ok
     return JSONResponse(
         status_code=200 if ready else 503,
         content={
@@ -129,6 +150,7 @@ async def readiness():
                 "db": {"backend": settings.db_backend, "ok": db_ok},
                 "cache": {"backend": settings.cache_backend, "ok": cache_ok},
                 "vector": {"backend": settings.vector_backend},
+                "event_bus": {"backend": settings.cache_backend, "ok": bus_ok},
             },
         },
     )
@@ -166,13 +188,9 @@ if _os.path.isdir(_static_dir):
         return JSONResponse({"message": "MetaPivot API", "docs": "/docs"})
 
 
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """关闭事件（兼容旧版）"""
-    pass
-
-
+# 注：生产部署若通过 `uvicorn app.main:app` 启动（非 python -m app.main），
+# 请追加 CLI 参数 `--timeout-graceful-shutdown 25` 以匹配 K8s
+# terminationGracePeriodSeconds=30 的优雅关闭窗口。
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
@@ -181,4 +199,6 @@ if __name__ == "__main__":
         port=settings.app_port,
         reload=settings.app_debug,
         log_level=settings.app_log_level.lower(),
+        # K8s 兼容：terminationGracePeriodSeconds 默认 30s，留 5s 余量
+        timeout_graceful_shutdown=25,
     )

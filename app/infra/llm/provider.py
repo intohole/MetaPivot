@@ -1,4 +1,7 @@
-"""LLM Provider - OpenAI兼容，支持Kimi/Qwen/GLM/DeepSeek切换"""
+"""LLM Provider - OpenAI兼容，支持Kimi/Qwen/GLM/DeepSeek切换
+
+集成熔断器：连续失败自动熔断，避免雪崩。
+"""
 from typing import Any, AsyncIterator, Optional
 
 from openai import AsyncOpenAI
@@ -11,7 +14,7 @@ log = get_logger("llm")
 
 
 class LLMProvider:
-    """LLM统一Provider，所有调用异步"""
+    """LLM统一Provider，所有调用异步，集成熔断器"""
 
     def __init__(self) -> None:
         self.client = AsyncOpenAI(
@@ -22,7 +25,6 @@ class LLMProvider:
         self.model = settings.llm_model
         self.max_retries = 3
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     async def chat_completion(
         self,
         messages: list[dict],
@@ -32,7 +34,21 @@ class LLMProvider:
         max_tokens: Optional[int] = None,
         response_format: Optional[dict] = None,
     ) -> dict[str, Any]:
-        """对话补全（支持工具调用）"""
+        """对话补全（支持工具调用，集成熔断器）"""
+        # 熔断器检查
+        from app.infra.llm.circuit_breaker import get_circuit_breaker
+        breaker = get_circuit_breaker()
+        allowed, reason = await breaker.allow_request()
+        if not allowed:
+            log.warning("LLM call blocked by circuit breaker: {}", reason)
+            return {
+                "content": None,
+                "tool_calls": None,
+                "finish_reason": "circuit_open",
+                "error": reason,
+                "usage": None,
+            }
+
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -47,29 +63,43 @@ class LLMProvider:
             kwargs["response_format"] = response_format
 
         try:
-            response = await self.client.chat.completions.create(**kwargs)
-            return {
-                "content": response.choices[0].message.content,
-                "tool_calls": response.choices[0].message.tool_calls,
-                "finish_reason": response.choices[0].finish_reason,
-                "usage": {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                } if response.usage else None,
-            }
+            response = await self._call_with_retry(kwargs)
+            await breaker.record_success()
+            return response
         except Exception as e:
+            await breaker.record_failure()
             log.error("LLM chat completion failed: {}", e)
             raise
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    async def _call_with_retry(self, kwargs: dict) -> dict[str, Any]:
+        """带 tenacity 重试的实际 LLM 调用"""
+        response = await self.client.chat.completions.create(**kwargs)
+        return {
+            "content": response.choices[0].message.content,
+            "tool_calls": response.choices[0].message.tool_calls,
+            "finish_reason": response.choices[0].finish_reason,
+            "usage": {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            } if response.usage else None,
+        }
+
     async def chat_stream(
         self,
         messages: list[dict],
         tools: Optional[list[dict]] = None,
         temperature: Optional[float] = None,
     ) -> AsyncIterator[str]:
-        """流式对话补全"""
+        """流式对话补全（集成熔断器）"""
+        from app.infra.llm.circuit_breaker import get_circuit_breaker
+        breaker = get_circuit_breaker()
+        allowed, reason = await breaker.allow_request()
+        if not allowed:
+            log.warning("LLM stream blocked by circuit breaker: {}", reason)
+            return  # 空 async generator
+
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -85,7 +115,9 @@ class LLMProvider:
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
+            await breaker.record_success()
         except Exception as e:
+            await breaker.record_failure()
             log.error("LLM stream failed: {}", e)
             raise
 

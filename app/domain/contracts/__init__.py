@@ -9,7 +9,8 @@
 所有 Protocol 使用 @runtime_checkable 装饰，支持 isinstance 检查。
 """
 from app.domain.contracts.cache import ICache
+from app.domain.contracts.event_bus import IEventBus
 from app.domain.contracts.llm import ILLMProvider
 from app.domain.contracts.vector import IVectorStore
 
-__all__ = ["ICache", "ILLMProvider", "IVectorStore"]
+__all__ = ["ICache", "IEventBus", "ILLMProvider", "IVectorStore"]
