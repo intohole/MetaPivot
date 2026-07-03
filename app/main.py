@@ -106,21 +106,30 @@ async def health():
         "status": "healthy",
         "version": settings.app_version,
         "env": settings.app_env,
+        "profile": {
+            "db": settings.db_backend,
+            "cache": settings.cache_backend,
+            "vector": settings.vector_backend,
+        },
     }
 
 
 @app.get("/ready", tags=["health"])
 async def readiness():
-    """就绪检查"""
+    """就绪检查（按配置的 backend 检查实际依赖）"""
     db_ok = await check_db_health()
-    from app.infra.cache.redis_client import check_redis_health
-    redis_ok = await check_redis_health()
-    ready = db_ok and redis_ok
+    from app.infra.cache.factory import check_cache_health
+    cache_ok = await check_cache_health()
+    ready = db_ok and cache_ok
     return JSONResponse(
         status_code=200 if ready else 503,
         content={
             "status": "ready" if ready else "not_ready",
-            "dependencies": {"postgres": db_ok, "redis": redis_ok},
+            "dependencies": {
+                "db": {"backend": settings.db_backend, "ok": db_ok},
+                "cache": {"backend": settings.cache_backend, "ok": cache_ok},
+                "vector": {"backend": settings.vector_backend},
+            },
         },
     )
 

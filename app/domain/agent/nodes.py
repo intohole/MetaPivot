@@ -1,12 +1,12 @@
 """Agent 节点实现 - 自定义状态机各节点函数
 
 节点列表：
-- intent_node: 意图分类 → mode (pipeline/agent/workflow/fallback)
+- intent_node: LLM 意图分类 → mode (pipeline/agent/workflow)
 - planner_node: 构造对话上下文
-- executor_node: 执行工具调用（LLM tool_calls 循环）
+- executor_node: 并行执行工具调用（asyncio.gather）
 - hitl_node: 检查 require_confirm，需要则触发暂停
-- reflector_node: 评估是否继续循环
-- replier_node: 生成最终回复
+- reflector_node: 评估是否继续循环（含 stuck 检测）
+- replier_node: 生成最终回复（支持流式）
 
 每个节点签名：async def node(state: AgentState) -> dict（返回部分状态更新）
 
@@ -14,59 +14,47 @@
   本模块位于 Domain 层，但 executor_node / _execute_tool_call 通过函数内
   延迟导入 app.service.skill_service 调用 Service 层（运行时回调）。
   这是一种工程妥协：避免循环依赖的同时让节点能执行 IO（工具调用）。
-  严格 Domain 纯净化改造方向：定义 ToolRuntime Protocol，由 AgentService
-  注入实现，节点通过 state.runtime 调用。当前妥协可接受，列为后续优化项。
 """
+import asyncio
 import json
 from datetime import datetime
 from typing import Any
 
+from app.domain.agent.intent import classify_intent
+from app.domain.agent.prompts import REPLY_PROMPT, SYSTEM_PROMPT
 from app.domain.agent.state import AgentMode, AgentState, AgentStatus, StepRecord
 from app.utils.logger import get_logger
 from app.utils.response import ErrorCode
 
 log = get_logger("agent_nodes")
 
-# 系统提示词
-_SYSTEM_PROMPT = """你是企业内部办公助手 MetaPivot，帮助员工高效完成工作。
-你可以调用已注册的 Skill（包括知识库检索、内部系统 API、MCP 工具等）来解决问题。
-规则：
-1. 优先使用 Skill 工具获取准确信息，避免凭记忆回答
-2. 敏感操作（如审批、删除）会要求用户确认
-3. 无法处理时坦诚告知，不要编造信息
-4. 回答简洁清晰，使用中文"""
 
-_PLAN_PROMPT = """分析用户请求，制定执行计划。
-可用工具：{tools}
-用户请求：{message}
-输出 JSON：{{"mode": "pipeline|agent|workflow", "steps": [{{"tool": "工具名", "reason": "原因"}}], "intent": "意图描述"}}"""
-
+# ============ 意图分类 ============
 
 async def intent_node(state: AgentState) -> dict:
-    """意图分类节点：判断执行模式"""
+    """意图分类节点：LLM 判断执行模式（替代关键词规则）"""
     state.add_event("step_started", {"step": "intent"})
-    # 简单规则：有可用工具且消息包含动词性词汇 → agent 模式
-    msg = state.original_message
-    has_tool_keywords = any(kw in msg for kw in ["查询", "获取", "创建", "申请", "审批", "调用", "执行"])
-    if state.available_tools and has_tool_keywords:
-        mode = AgentMode.AGENT
-        intent = "tool_call"
-    elif msg.endswith("?") or msg.endswith("？") or any(kw in msg for kw in ["是什么", "怎么", "如何", "为什么"]):
-        mode = AgentMode.PIPELINE
-        intent = "qa"
-    else:
-        mode = AgentMode.AGENT
-        intent = "task"
+    from app.infra.llm.provider import get_llm
+    from app.service.skill_service import skill_service
+
+    # 预加载可用工具（后续 executor 也会用到）
+    tools = await skill_service.list_tools_for_llm(permission="user")
+    state.available_tools = tools
+
+    llm = get_llm()
+    mode, intent = await classify_intent(state.original_message, tools, llm_provider=llm)
 
     state.add_event("step_completed", {"step": "intent", "result": {"mode": mode.value, "intent": intent}})
-    return {"mode": mode, "intent": intent, "status": AgentStatus.PLANNING}
+    return {"mode": mode, "intent": intent, "status": AgentStatus.PLANNING, "available_tools": tools}
 
+
+# ============ 规划 ============
 
 async def planner_node(state: AgentState) -> dict:
-    """规划节点：让 LLM 决定工具调用顺序（ReAct 风格）
+    """规划节点：构造对话上下文
 
     简化实现：直接进入 executor，由 LLM tool_choice=auto 决定调用哪个工具。
-    完整版可用 Plan-Execute 模板先生成步骤列表。
+    完整版可用 Plan-Execute 模板先生成步骤列表（后续优化项）。
     """
     state.add_event("step_started", {"step": "planning"})
     if state.mode == AgentMode.PIPELINE:
@@ -77,17 +65,18 @@ async def planner_node(state: AgentState) -> dict:
     # AGENT 模式：构造对话上下文
     if not state.messages:
         state.messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": state.original_message},
         ]
     state.add_event("step_completed", {"step": "planning"})
     return {"status": AgentStatus.EXECUTING, "messages": state.messages}
 
 
+# ============ 执行（并行工具调用）============
+
 async def executor_node(state: AgentState) -> dict:
-    """执行节点：调用 LLM 并执行 tool_calls"""
+    """执行节点：调用 LLM 并并行执行 tool_calls"""
     from app.infra.llm.provider import get_llm
-    from app.service.skill_service import skill_service
 
     state.add_event("step_started", {"step": f"execute_{state.current_step}"})
 
@@ -97,9 +86,9 @@ async def executor_node(state: AgentState) -> dict:
 
     started = datetime.now()
     llm = get_llm()
-    tools = await skill_service.list_tools_for_llm(permission="user")
+    tools = state.available_tools
 
-    # Guardrail 输入脱敏：避免 PII 泄露给 LLM
+    # Guardrail 输入脱敏
     from app.domain.agent.guardrail import sanitize_messages, sanitize_output
     safe_messages = sanitize_messages(state.messages)
 
@@ -115,7 +104,6 @@ async def executor_node(state: AgentState) -> dict:
         return {"status": AgentStatus.FAILED, "error": {"code": "LLM_ERROR", "message": str(e)}}
 
     content = result.get("content")
-    # Guardrail 输出脱敏：移除 LLM 响应中可能泄露的敏感关键词
     if content:
         content = sanitize_output(content)
     tool_calls = result.get("tool_calls") or []
@@ -129,32 +117,35 @@ async def executor_node(state: AgentState) -> dict:
                     "result": {"answer": content, "usage": result.get("usage")}}
         return {"status": AgentStatus.REFLECTING}
 
-    # 执行工具调用
+    # 记录 assistant 消息（含 tool_calls）
     state.messages.append({"role": "assistant", "content": content, "tool_calls": [
         {"id": tc.id, "type": "function", "function": {
             "name": tc.function.name, "arguments": tc.function.arguments,
         }} for tc in tool_calls
     ]})
 
-    step_records = []
-    for tc in tool_calls:
-        step = await _execute_tool_call(state, tc)
-        step_records.append(step)
-        # 工具结果回填给 LLM
+    # 并行执行所有工具调用（asyncio.gather）
+    tasks = [_execute_tool_call(state, tc) for tc in tool_calls]
+    step_records = await asyncio.gather(*tasks, return_exceptions=False)
+
+    # 回填工具结果给 LLM（保持 tool_call_id 关联）
+    for step, tc in zip(step_records, tool_calls):
         state.messages.append({
             "role": "tool", "tool_call_id": tc.id,
-            "name": tc.function.name, "content": json.dumps(step.tool_output, ensure_ascii=False)[:2000],
+            "name": tc.function.name,
+            "content": json.dumps(step.tool_output, ensure_ascii=False)[:2000],
         })
-        # 检查 HITL
+
+    # 检查 HITL：若有步骤需要确认且未确认，暂停
+    for step in step_records:
         if step.require_confirm and step.confirm_decision is None:
             state.add_event("human_confirm_required", {
-                "step": step.step_index, "tool": step.tool_name,
-                "input": step.tool_input,
+                "step": step.step_index, "tool": step.tool_name, "input": step.tool_input,
             })
             return {
                 "status": AgentStatus.WAITING_CONFIRM,
                 "pending_confirm": {"step": step.step_index, "tool": step.tool_name, "input": step.tool_input},
-                "steps": state.steps + step_records,
+                "steps": state.steps + list(step_records),
             }
 
     state.add_event("step_completed", {"step": f"execute_{state.current_step}"})
@@ -162,12 +153,12 @@ async def executor_node(state: AgentState) -> dict:
         "status": AgentStatus.REFLECTING,
         "messages": state.messages,
         "current_step": state.current_step + 1,
-        "steps": state.steps + step_records,
+        "steps": state.steps + list(step_records),
     }
 
 
 async def _execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
-    """执行单个工具调用"""
+    """执行单个工具调用（可并行，无状态副作用）"""
     from app.service.skill_service import skill_service
     started = datetime.now()
     tool_name = tc.function.name
@@ -189,11 +180,10 @@ async def _execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
         step.duration_ms = int((datetime.now() - started).total_seconds() * 1000)
         return step
 
-    # 查询是否需要确认
     skill = await skill_service.get_skill(skill_id)
     step.require_confirm = skill.require_confirm if skill else False
 
-    # HITL 检查
+    # HITL 检查：需要确认则不执行，等待用户确认
     if step.require_confirm:
         step.status = "waiting_confirm"
         step.duration_ms = int((datetime.now() - started).total_seconds() * 1000)
@@ -212,15 +202,12 @@ async def _execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
     return step
 
 
-async def hitl_node(state: AgentState) -> dict:
-    """HITL 节点：检查 pending_confirm，需要则等待用户确认
+# ============ HITL / 反思 / 回复 ============
 
-    在 LangGraph 中通过 interrupt 实现：暂停执行，等待外部 resume。
-    """
+async def hitl_node(state: AgentState) -> dict:
+    """HITL 节点：检查 pending_confirm，需要则等待用户确认"""
     if state.pending_confirm is None:
         return {"status": AgentStatus.REFLECTING}
-
-    # 等待用户确认（由 AgentService 处理 interrupt）
     state.add_event("human_confirm_required", {
         "step": state.pending_confirm.get("step"),
         "tool": state.pending_confirm.get("tool"),
@@ -229,63 +216,63 @@ async def hitl_node(state: AgentState) -> dict:
 
 
 async def reflector_node(state: AgentState) -> dict:
-    """反思节点：评估是否需要继续循环
-
-    简化规则：
-    - 如果最后一条消息是 tool 结果 → 继续执行（让 LLM 综合结果）
-    - 否则进入回复
-    """
+    """反思节点：评估是否继续循环（含 stuck 检测）"""
     if state.status == AgentStatus.COMPLETED:
         return {}
-
     if state.status == AgentStatus.WAITING_CONFIRM:
         return {}
 
-    # 检查最后消息
+    # stuck 检测：连续 3 次调用同一工具且失败 → 放弃
+    if _is_stuck(state):
+        log.warning("Agent stuck detected, giving up")
+        state.add_event("stuck_detected", {"step": state.current_step})
+        return {"status": AgentStatus.FAILED, "error": {"code": "AGENT_STUCK", "message": "连续工具调用失败，放弃执行"}}
+
+    # 最后消息是 tool 结果 → 继续执行（让 LLM 综合结果）
     if state.messages and state.messages[-1].get("role") == "tool":
         return {"status": AgentStatus.EXECUTING, "current_step": state.current_step}
 
     return {"status": AgentStatus.COMPLETED if state.final_answer else AgentStatus.REFLECTING}
 
 
-async def replier_node(state: AgentState) -> dict:
-    """回复节点：生成最终回复
+def _is_stuck(state: AgentState) -> bool:
+    """检测是否卡住：连续 3 次失败调用同一工具"""
+    recent = state.steps[-3:] if len(state.steps) >= 3 else []
+    if len(recent) < 3:
+        return False
+    tool_names = [s.tool_name for s in recent]
+    statuses = [s.status for s in recent]
+    # 同一工具且全部失败
+    return len(set(tool_names)) == 1 and all(s == "failed" for s in statuses)
 
-    - pipeline 模式：直接 LLM 对话回复
-    - agent 模式：综合工具调用结果生成回复
-    """
+
+async def replier_node(state: AgentState) -> dict:
+    """回复节点：生成最终回复（非流式版本，流式由 graph 层处理）"""
     if state.final_answer:
         state.add_event("final_result", {"answer": state.final_answer})
         return {"status": AgentStatus.COMPLETED}
 
+    from app.infra.llm.provider import get_llm
+    llm = get_llm()
+
     if state.mode == AgentMode.PIPELINE or not state.available_tools:
-        from app.infra.llm.provider import get_llm
-        llm = get_llm()
         messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": state.original_message},
         ]
         result = await llm.chat_completion(messages=messages)
         answer = result.get("content", "")
         state.add_event("final_result", {"answer": answer})
-        return {
-            "status": AgentStatus.COMPLETED, "final_answer": answer,
-            "result": {"answer": answer, "usage": result.get("usage")},
-        }
+        return {"status": AgentStatus.COMPLETED, "final_answer": answer,
+                "result": {"answer": answer, "usage": result.get("usage")}}
 
     # agent 模式：综合工具结果生成最终回复
     if state.messages:
-        from app.infra.llm.provider import get_llm
-        llm = get_llm()
-        state.messages.append({
-            "role": "user", "content": "请根据以上工具调用结果，给出最终回复。",
-        })
+        state.messages.append({"role": "user", "content": REPLY_PROMPT})
         result = await llm.chat_completion(messages=state.messages)
         answer = result.get("content", "")
         state.add_event("final_result", {"answer": answer})
-        return {
-            "status": AgentStatus.COMPLETED, "final_answer": answer,
-            "result": {"answer": answer, "usage": result.get("usage")},
-        }
+        return {"status": AgentStatus.COMPLETED, "final_answer": answer,
+                "result": {"answer": answer, "usage": result.get("usage")}}
 
     return {"status": AgentStatus.COMPLETED, "final_answer": "无法处理您的请求"}

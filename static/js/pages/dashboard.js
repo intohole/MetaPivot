@@ -53,9 +53,18 @@
         { label: '上传知识文档', icon: '📚', path: '/knowledge' }
       ]
 
+      // 新手引导步骤（stats.tasks === 0 时显示）
+      const onboardingSteps = [
+        { step: 1, title: '配置 LLM API Key', desc: '在 .env 填入 LLM_API_KEY（支持 Kimi/Qwen/GLM）', path: '/configs' },
+        { step: 2, title: '测试 Agent 对话', desc: '发起一次对话，验证 LLM + Agent 状态机正常', path: '/agent' },
+        { step: 3, title: '注册 Skill 能力', desc: '添加业务 Skill 或接入 MCP Server', path: '/skills' },
+        { step: 4, title: '接入 IM 渠道', desc: '配置钉钉/企微/飞书 webhook', path: '/channels' }
+      ]
+      const showOnboarding = computed(() => !loading.value && stats.value.tasks === 0)
+
       onMounted(loadDashboard)
 
-      return { stats, statCards, recentTasks, loading, quickActions, state, loadDashboard }
+      return { stats, statCards, recentTasks, loading, quickActions, onboardingSteps, showOnboarding, state, loadDashboard }
     },
     template: `
       <div class="space-y-6">
@@ -71,6 +80,23 @@
             </div>
           </div>
         </div>
+
+        <!-- 新手引导（无任务时显示） -->
+        <base-card v-if="showOnboarding" title="🚀 快速开始指南" subtitle="按步骤完成初始化，4 步上手 MetaPivot">
+          <div class="space-y-3">
+            <div v-for="s in onboardingSteps" :key="s.step"
+                 class="flex items-start gap-3 p-3 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
+                 @click="state.navigate(s.path)">
+              <div class="flex-shrink-0 w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold"
+                   aria-hidden="true">{{ s.step }}</div>
+              <div class="flex-1">
+                <p class="text-sm font-medium text-ink">{{ s.title }}</p>
+                <p class="text-xs text-ink-muted mt-0.5">{{ s.desc }}</p>
+              </div>
+              <div class="text-ink-subtle" aria-hidden="true">→</div>
+            </div>
+          </div>
+        </base-card>
 
         <!-- 快捷操作 -->
         <base-card title="快捷操作">

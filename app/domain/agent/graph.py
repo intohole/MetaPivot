@@ -8,7 +8,7 @@
 - 通过 DB 持久化 AgentState 实现 checkpoint
 - 通过 status=WAITING_CONFIRM + pending_confirm 实现 interrupt
 - 通过 confirm_task() 恢复执行
-- 通过 async generator 实现 stream 推送
+- 通过 async generator 实现 stream 推送（含 token 级流式回复）
 """
 import asyncio
 import json
@@ -22,7 +22,8 @@ from app.domain.agent.nodes import (
     reflector_node,
     replier_node,
 )
-from app.domain.agent.state import AgentState, AgentStatus
+from app.domain.agent.prompts import REPLY_PROMPT, SYSTEM_PROMPT
+from app.domain.agent.state import AgentMode, AgentState, AgentStatus
 from app.utils.logger import get_logger
 
 log = get_logger("agent_graph")
@@ -39,9 +40,11 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
     状态机推进顺序：
         intent → planner → (executor → reflector)* → replier → end
     遇到 WAITING_CONFIRM 则暂停（yield 事件后返回，等待 confirm 恢复）
+
+    最终回复优先使用流式输出（token 事件），失败时降级为非流式。
     """
     try:
-        # 1. 意图分类
+        # 1. 意图分类（LLM）
         state = await _advance(intent_node, state)
         yield _event("intent_completed", {"mode": state.mode.value, "intent": state.intent})
 
@@ -49,12 +52,11 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
         state = await _advance(planner_node, state)
         yield _event("planning_completed", {})
 
-        # 3. 执行循环
+        # 3. 执行循环（并行工具调用）
         loop_count = 0
         while loop_count < _MAX_LOOP:
             loop_count += 1
 
-            # 检查是否已完成
             if state.status == AgentStatus.COMPLETED:
                 break
 
@@ -84,13 +86,18 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
                 yield _event("hitl_paused", state.pending_confirm or {})
                 return  # 暂停
 
-            # 未预期状态
             log.warning("Unexpected status: {}", state.status)
             break
 
-        # 4. 生成最终回复
+        # 4. 生成最终回复（优先流式）
         if state.status != AgentStatus.COMPLETED:
-            state = await _advance(replier_node, state)
+            # 尝试流式回复，逐 token 推送
+            async for token_event in _stream_final_reply(state):
+                yield token_event
+
+            # 流式失败（state 仍非 COMPLETED），降级为非流式
+            if state.status != AgentStatus.COMPLETED:
+                state = await _advance(replier_node, state)
 
         yield _event("final_result", {
             "answer": state.final_answer,
@@ -103,6 +110,41 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
         state.status = AgentStatus.FAILED
         state.error = {"code": "AGENT_ERROR", "message": str(e)}
         yield _event("error", state.error)
+
+
+async def _stream_final_reply(state: AgentState) -> AsyncGenerator[dict, None]:
+    """流式生成最终回复，yield token 事件
+
+    使用 LLM chat_stream 逐 token 输出，提升用户感知速度。
+    失败时静默返回（state.status 不变），由调用方降级为非流式。
+    """
+    from app.infra.llm.provider import get_llm
+
+    llm = get_llm()
+
+    # 构造最终回复的 messages
+    if state.mode == AgentMode.PIPELINE or not state.available_tools:
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": state.original_message},
+        ]
+    elif state.messages:
+        messages = list(state.messages) + [{"role": "user", "content": REPLY_PROMPT}]
+    else:
+        return  # 无可用上下文，降级
+
+    full_answer = ""
+    try:
+        async for token in llm.chat_stream(messages=messages):
+            full_answer += token
+            yield _event("token", {"text": token})
+    except Exception as e:
+        log.warning("Stream reply failed, fallback to non-stream: {}", e)
+        return  # 降级，由调用方走 replier_node
+
+    state.final_answer = full_answer
+    state.result = {"answer": full_answer}
+    state.status = AgentStatus.COMPLETED
 
 
 async def resume_agent(state: AgentState) -> AsyncGenerator[dict, None]:

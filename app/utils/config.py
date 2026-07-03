@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     app_log_level: str = "INFO"
     app_log_retention_days: int = 3
 
+    # 部署规模（资源可伸缩）— 小企业可用 sqlite/memory/local，零外部依赖
+    db_backend: Literal["sqlite", "postgresql"] = "postgresql"
+    cache_backend: Literal["memory", "redis"] = "redis"
+    vector_backend: Literal["local", "milvus"] = "local"
+    sqlite_path: str = "data/metapivot.db"
+
     # LLM
     llm_provider: Literal["kimi", "qwen", "glm", "deepseek"] = "kimi"
     llm_api_key: str = ""
@@ -35,20 +41,20 @@ class Settings(BaseSettings):
     llm_max_steps: int = 10
     llm_temperature: float = 0.3
 
-    # PostgreSQL
+    # PostgreSQL（db_backend=postgresql 时使用）
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "metapivot"
     postgres_user: str = "metapivot"
     postgres_password: str = ""
 
-    # Redis
+    # Redis（cache_backend=redis 时使用）
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str = ""
     redis_db: int = 0
 
-    # Milvus
+    # Milvus（vector_backend=milvus 时使用）
     milvus_host: str = "localhost"
     milvus_port: int = 19530
     milvus_collection: str = "knowledge_chunks"
@@ -90,6 +96,13 @@ class Settings(BaseSettings):
             f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    @property
+    def db_dsn(self) -> str:
+        """统一数据库 DSN（按 db_backend 切换 SQLite/PostgreSQL）"""
+        if self.db_backend == "sqlite":
+            return f"sqlite+aiosqlite:///{self.sqlite_path}"
+        return self.postgres_dsn
 
     @property
     def redis_url(self) -> str:

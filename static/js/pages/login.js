@@ -37,7 +37,12 @@
 
       const onKey = (e) => { if (e.key === 'Enter') handleSubmit() }
 
-      return { form, errors, submitting, handleSubmit, onKey }
+      const fillDemo = () => {
+        form.username = 'admin'
+        form.password = 'admin123'
+      }
+
+      return { form, errors, submitting, handleSubmit, onKey, fillDemo }
     },
     template: `
       <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-surface to-indigo-50 p-4">
@@ -77,7 +82,11 @@
           </form>
 
           <div class="mt-6 pt-4 border-t border-border text-center">
-            <p class="text-xs text-ink-subtle">默认管理员账号 admin / admin123</p>
+            <button type="button" @click="fillDemo"
+                    class="text-xs text-blue-600 hover:text-blue-800 hover:underline cursor-pointer">
+              点击填充演示账号（admin / admin123）
+            </button>
+            <p class="mt-1 text-xs text-ink-subtle">首次登录后请立即修改密码</p>
           </div>
         </div>
       </div>

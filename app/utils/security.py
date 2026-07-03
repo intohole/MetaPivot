@@ -5,13 +5,10 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+import bcrypt
 import jwt
-from passlib.context import CryptContext
 
 from app.utils.config import settings
-
-# 密码哈希
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # 脱敏正则（注意顺序：长模式优先，避免短模式先行匹配导致部分脱敏）
 _DESENSITIZE_PATTERNS = [
@@ -22,13 +19,18 @@ _DESENSITIZE_PATTERNS = [
 
 
 def hash_password(password: str) -> str:
-    """密码哈希"""
-    return _pwd_context.hash(password)
+    """密码哈希（bcrypt，兼容 passlib hash 格式 $2b$）"""
+    # bcrypt 限制 72 字节，超长截断（与 passlib 行为一致）
+    pwd_bytes = password.encode("utf-8")[:72]
+    return bcrypt.hashpw(pwd_bytes, bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    """密码校验"""
-    return _pwd_context.verify(plain, hashed)
+    """密码校验（兼容 passlib 生成的 $2b$ hash）"""
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8")[:72], hashed.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 
 
 def create_access_token(payload: dict, expires_in: Optional[int] = None) -> str:

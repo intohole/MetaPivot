@@ -1,0 +1,3 @@
+# SQLite 数据库文件存放目录（小企业部署）
+# .env 中 SQLITE_PATH=data/metapivot.db
+# 实际 .db 文件已被 .gitignore 忽略
