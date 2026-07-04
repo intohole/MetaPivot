@@ -8,7 +8,7 @@
 
 保留的函数签名与原 redis_client 完全一致，确保现有调用方零改动。
 """
-from typing import Optional
+from typing import Optional, Tuple
 
 from app.infra.cache.factory import check_cache_health, close_cache, get_cache
 
@@ -53,7 +53,7 @@ async def release_lock(key: str) -> None:
     await cache.release_lock(key)
 
 
-async def rate_limit(key: str, limit: int, window: int = 1) -> bool:
+async def rate_limit(key: str, limit: int, window: int = 1) -> Tuple[bool, int]:
     cache = await get_cache()
     return await cache.rate_limit(key, limit, window)
 

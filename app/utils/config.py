@@ -82,6 +82,8 @@ class Settings(BaseSettings):
 
     # 安全
     jwt_secret: str = Field(default="", min_length=32)
+    jwt_secret_previous: str = ""  # 轮换时填旧密钥，留空表示无轮换
+    jwt_kid_primary: str = "primary"  # 当前主密钥标识
     jwt_expires_in: int = 3600
     jwt_algorithm: str = "HS256"
     encrypt_key: str = Field(default="", min_length=32)

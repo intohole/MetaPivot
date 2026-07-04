@@ -1,6 +1,7 @@
 """Agent 节点实现 - 自定义状态机各节点函数
 
-节点：intent_node → planner_node → executor_node → hitl_node → reflector_node → replier_node
+节点：intent_node → planner_node → executor_node → hitl_node → reflector_node
+（replier_node 已抽离到 replier.py，控制文件行数）
 每个节点签名：async def node(state: AgentState) -> dict（返回部分状态更新）
 
 架构：Domain 层节点通过函数内延迟 import Service 层执行 IO，避免循环依赖。
@@ -18,7 +19,7 @@ from app.domain.agent.executor import (
     truncate_tool_output,
 )
 from app.domain.agent.intent import classify_intent
-from app.domain.agent.prompts import REPLY_PROMPT, SYSTEM_PROMPT
+from app.domain.agent.prompts import SYSTEM_PROMPT
 from app.domain.agent.state import AgentMode, AgentState, AgentStatus, StepRecord
 from app.utils.config import settings
 from app.utils.logger import get_logger
@@ -263,38 +264,3 @@ def _is_stuck(state: AgentState) -> bool:
     tool_names = [s.tool_name for s in recent]
     statuses = [s.status for s in recent]
     return len(set(tool_names)) == 1 and all(s == "failed" for s in statuses)
-
-
-async def replier_node(state: AgentState) -> dict:
-    """回复节点：生成最终回复（非流式版本，流式由 graph 层处理）"""
-    if state.final_answer:
-        state.add_event("final_result", {"answer": state.final_answer})
-        return {"status": AgentStatus.COMPLETED}
-
-    from app.infra.llm.provider import get_llm
-    llm = get_llm()
-
-    if state.mode == AgentMode.PIPELINE or not state.available_tools:
-        messages = [{"role": "system", "content": SYSTEM_PROMPT},
-                     {"role": "user", "content": state.original_message}]
-    elif state.messages:
-        from app.domain.agent.context_window import get_context_window_tokens
-        apply_context_trim(state, get_context_window_tokens(settings.llm_model), "reply")
-        state.messages.append({"role": "user", "content": REPLY_PROMPT})
-        messages = state.messages
-    else:
-        return {"status": AgentStatus.COMPLETED, "final_answer": "无法处理您的请求"}
-
-    try:
-        result = await llm.chat_completion(messages=messages)
-    except Exception as e:
-        log.exception("Replier LLM call failed: {}", e)
-        state.add_event("error", {"message": str(e)})
-        record_llm_metrics({}, 0, "failed")
-        return {"status": AgentStatus.FAILED, "error": {"code": "LLM_ERROR", "message": str(e)}}
-    answer, usage = result.get("content", ""), result.get("usage") or {}
-    state.total_tokens += int(usage.get("total_tokens", 0))
-    state.add_event("final_result", {"answer": answer, "usage": usage})
-    record_llm_metrics(usage, 0)
-    return {"status": AgentStatus.COMPLETED, "final_answer": answer,
-            "result": {"answer": answer, "usage": usage}, "total_tokens": state.total_tokens}

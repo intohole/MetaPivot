@@ -19,8 +19,8 @@ from app.domain.agent.nodes import (
     intent_node,
     planner_node,
     reflector_node,
-    replier_node,
 )
+from app.domain.agent.replier import replier_node
 from app.domain.agent.scheduler_node import scheduler_node
 from app.domain.agent.prompts import REPLY_PROMPT, SYSTEM_PROMPT
 from app.domain.agent.state import AgentMode, AgentState, AgentStatus
@@ -177,6 +177,9 @@ async def _stream_final_reply(state: AgentState) -> AsyncGenerator[dict, None]:
         log.warning("Stream reply failed, fallback to non-stream: {}", e)
         return  # 降级，由调用方走 replier_node
 
+    # 安全加固：流式输出也必须经 sanitize_output 脱敏，防止敏感关键词泄露
+    from app.domain.agent.guardrail import sanitize_output
+    full_answer = sanitize_output(full_answer)
     state.final_answer = full_answer
     state.result = {"answer": full_answer}
     state.status = AgentStatus.COMPLETED

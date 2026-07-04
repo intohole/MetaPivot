@@ -14,36 +14,47 @@ from app.utils.security import desensitize
 
 log = get_logger("guardrail")
 
-# Prompt injection 检测模式
+# Prompt injection 检测模式（命中即阻断，返回安全文本）
 _INJECTION_PATTERNS = [
     re.compile(r"忽略(?:以上|上面|先前|之前)的?(?:指令|规则|提示)", re.IGNORECASE),
     re.compile(r"ignore\s+(?:above|previous|prior)\s+(?:instruction|rule)", re.IGNORECASE),
     re.compile(r"你(?:现在)?是(?:一个)??(?:无限制|无道德|DAN)", re.IGNORECASE),
     re.compile(r"system\s*[:：]\s*", re.IGNORECASE),
+    re.compile(r"(?:扮演|假装)你是(?:一个)?(?:无限制|无道德|DAN)", re.IGNORECASE),
+    re.compile(r"(?:输出|告诉我|显示)你的?(?:系统|初始)提示", re.IGNORECASE),
 ]
 
 # 输出侧禁止泄露的内部关键词
 _SENSITIVE_OUTPUT_KEYWORDS = [
-    "password_hash", "jwt_secret", "encrypt_key", "api_key",
-    "DATABASE_URL", "POSTGRES_PASSWORD", "REDIS_PASSWORD",
+    "password_hash", "jwt_secret", "jwt_secret_previous", "encrypt_key",
+    "api_key", "DATABASE_URL", "POSTGRES_PASSWORD", "REDIS_PASSWORD",
+    "DINGTALK_CLIENT_SECRET", "WECOM_APP_SECRET", "FEISHU_APP_SECRET",
 ]
+
+# injection 命中时返回的安全文本（替代原始输入，阻断而非放行）
+_INJECTION_BLOCKED_REPLY = (
+    "检测到潜在的提示注入请求，已拦截。"
+    "如需正常使用，请直接描述您的业务需求。"
+)
 
 
 def sanitize_input(text: str) -> str:
-    """输入脱敏：PII 替换 + prompt injection 检测
+    """输入脱敏：PII 替换 + prompt injection 阻断
 
-    返回脱敏后的文本；若检测到 injection 则记录告警但仍放行（不阻断业务）。
+    返回脱敏后的文本；若检测到 injection，返回安全拦截文本（阻断业务）。
+
+    阻断策略：返回安全文本而非抛异常 — 避免异常传播破坏状态机，
+    业务方拿到合法字符串继续流转，但 LLM 收到的是拦截提示而非用户原始注入内容。
     """
     if not text:
         return text
-    # PII 脱敏
-    sanitized = desensitize(text)
-    # Injection 检测（仅告警，不阻断）
+    # Injection 检测（命中即阻断，返回安全文本）
     for pattern in _INJECTION_PATTERNS:
         if pattern.search(text):
-            log.warning("Prompt injection detected: {}", pattern.pattern)
-            break
-    return sanitized
+            log.warning("Prompt injection blocked: {}", pattern.pattern)
+            return _INJECTION_BLOCKED_REPLY
+    # PII 脱敏（仅对非 injection 文本执行）
+    return desensitize(text)
 
 
 def sanitize_output(text: str) -> str:

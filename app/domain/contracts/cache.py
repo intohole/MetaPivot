@@ -9,7 +9,7 @@
 - key/value 均为字符串（与现有 redis_client 函数签名保持一致）
 - TTL 单位为秒；0 或负数表示不缓存
 """
-from typing import Optional, Protocol, runtime_checkable
+from typing import Optional, Protocol, Tuple, runtime_checkable
 
 
 @runtime_checkable
@@ -36,8 +36,12 @@ class ICache(Protocol):
         """释放锁"""
         ...
 
-    async def rate_limit(self, key: str, limit: int, window: int = 1) -> bool:
-        """令牌桶限流：window 秒内允许 limit 次请求，返回 True 放行"""
+    async def rate_limit(self, key: str, limit: int, window: int = 1) -> Tuple[bool, int]:
+        """令牌桶限流：返回 (是否放行, retry_after_seconds)
+
+        retry_after_seconds 为 0 表示放行或立即可重试；
+        >0 表示客户端应等待的秒数。
+        """
         ...
 
     async def ping(self) -> bool:

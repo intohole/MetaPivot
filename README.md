@@ -268,10 +268,35 @@ metapivot_agent_active_tasks
 
 - 全栈私有化部署，数据不出内网
 - JWT 认证 + RBAC（user/manager/admin 三级）
-- Guardrail 安全护栏（PII 脱敏 + prompt injection 检测）
+- Guardrail 安全护栏（PII 脱敏 + prompt injection 阻断）
 - 敏感操作 HITL 确认
 - 全量审计日志，留存 6 个月+
 - 等保 2.0 三级合规建议
+
+### P0 安全加固（已实施）
+
+**AES-CBC-256 加密**（`app/utils/security.py`）
+- 随机 IV（`os.urandom(16)`）前置于密文，相同明文产生不同密文，防差分攻击
+- SHA-256 派生密钥，替代 `ljust(32, b"\0")` 弱填充
+- `encrypt_aes` / `decrypt_aes` 配对，输出格式 `iv(16B) || ciphertext`
+
+**JWT kid 密钥轮换**（`app/utils/security.py`）
+- `create_access_token` 注入 `kid` header 标识当前主密钥
+- `decode_access_token` 支持 kid 多密钥并行校验（primary/previous）
+- 向后兼容（无 kid 走 primary）+ 主密钥失败 fallback previous（grace period）
+- 轮换流程：配置 `JWT_SECRET=新密钥` + `JWT_SECRET_PREVIOUS=旧密钥`，旧 token 过期后清空 `JWT_SECRET_PREVIOUS`
+
+**Guardrail 输入输出脱敏**（`app/domain/agent/guardrail.py` + `app/utils/security.py`）
+- PII 脱敏 4 类：身份证 / 手机号 / 邮箱 / **银行卡（Luhn 校验通过才脱敏，避免误伤长数字）**
+- prompt injection 命中即阻断，返回安全文本（不抛异常，避免破坏状态机）
+- 敏感关键词 11 个（jwt_secret / encrypt_key / api_key / DATABASE_URL / IM 密钥等），输出经 `sanitize_output` 替换为 `***`
+- 两处输出路径统一脱敏：`replier_node`（非流式）+ `_stream_final_reply`（流式）
+
+**用户维度限流**（`app/middleware/rate_limit.py` + `app/infra/cache/`）
+- Redis Lua 真令牌桶（原子 refill + consume + retry_after 计算），替代 INCR+EXPIRE 固定窗口
+- 限流维度：优先 `user:{jwt_sub}`，无 token 走 `ip:{client_ip}`，避免多账号绕过
+- 动态 Retry-After（429 响应 header + JSON body），客户端按值退避
+- Memory backend 滑动窗口适配，单进程下更精确
 
 ## 开发约定
 

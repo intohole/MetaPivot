@@ -15,31 +15,23 @@
 
 ## 一、安全升级（P0）
 
-### 1.1 数据脱敏与 Guardrail
-- **当前**：审计日志已对输入做哈希、输出做摘要截断，但 LLM 输入/输出未做敏感信息过滤
-- **目标**：
-  - 输入侧：Guardrail 前置过滤，识别身份证/手机号/银行卡并脱敏后再送 LLM
-  - 输出侧：LLM 响应后置校验，防止泄露内部系统细节
-- **实施**：
-  ```python
-  # app/domain/agent/guardrail.py（新建）
-  class InputGuardrail:
-      PII_PATTERNS = {  # 正则脱敏
-          "phone": r"1[3-9]\d{9}",
-          "idcard": r"\d{17}[\dXx]",
-      }
-      async def sanitize(self, text: str) -> str: ...
-  ```
-  - 在 `nodes.py:executor_node` 调用 LLM 前后插入 Guardrail
+### 1.1 数据脱敏与 Guardrail ✅ 已实施
+- **当前**：Guardrail 已覆盖 LLM 输入/输出全链路
+- **实施细节**：
+  - PII 脱敏 4 类：身份证 / 手机号 / 邮箱 / **银行卡（Luhn 校验通过才脱敏，避免误伤长数字）**
+  - prompt injection 命中即阻断（返回安全文本，不抛异常），覆盖 6 个 pattern（中英文）
+  - 敏感关键词 11 个（jwt_secret / encrypt_key / api_key / DATABASE_URL / IM 密钥等），输出经 `sanitize_output` 替换为 `***`
+  - 两处输出路径统一脱敏：`replier_node`（非流式）+ `_stream_final_reply`（流式）
 - **优先级**：P0（涉及数据合规）
 - **工作量**：2 天
 
-### 1.2 密钥管理与轮换
-- **当前**：JWT_SECRET / ENCRYPT_KEY / LLM_API_KEY 写在 .env，无轮换机制
-- **目标**：
-  - 接入内部密钥管理服务（Vault / KMS）或加密文件存储
-  - JWT_SECRET 支持 90 天轮换，新旧密钥并行 7 天（grace period）
-- **实施**：`app/utils/security.py` 增加 `get_jwt_secret()` 动态读取，支持多密钥验证
+### 1.2 密钥管理与轮换 ✅ 已实施
+- **当前**：JWT kid 多密钥并行校验 + AES-CBC-256 随机 IV
+- **实施细节**：
+  - `create_access_token` 注入 `kid` header 标识当前主密钥
+  - `decode_access_token` 支持 kid 多密钥并行校验（primary/previous）+ 向后兼容（无 kid 走 primary）+ 主密钥失败 fallback previous（grace period）
+  - 轮换流程：配置 `JWT_SECRET=新密钥` + `JWT_SECRET_PREVIOUS=旧密钥`，旧 token 过期后清空 `JWT_SECRET_PREVIOUS`
+  - AES-CBC-256 加密：随机 IV（`os.urandom(16)`）前置于密文 + SHA-256 派生密钥 + `decrypt_aes` 配对函数
 - **优先级**：P0
 - **工作量**：1.5 天
 
@@ -83,13 +75,14 @@
 - **优先级**：P1（直接影响用户体验）
 - **工作量**：3 天
 
-### 2.3 限流落地
-- **当前**：`settings` 有 `RATE_LIMIT_IM_QPS` / `RATE_LIMIT_API_QPS` 配置，但中间件未实现
-- **目标**：
-  - Redis 令牌桶限流中间件
-  - 按渠道（IM/API）+ 按用户双维度
-  - 超限返回 429 + Retry-After
-- **实施**：`app/middleware/rate_limit.py`（新建）
+### 2.3 限流落地 ✅ 已实施
+- **当前**：用户维度限流中间件已实施，Redis Lua 令牌桶 + Memory 滑动窗口双 backend
+- **实施细节**：
+  - Redis Lua 真令牌桶（原子 refill + consume + retry_after 计算），替代 INCR+EXPIRE 固定窗口
+  - 限流维度：优先 `user:{jwt_sub}`（从 Bearer token 解码），无 token 走 `ip:{client_ip}`，避免多账号绕过
+  - 动态 Retry-After（429 响应 header + JSON body），客户端按值退避
+  - Memory backend 滑动窗口适配，单进程下更精确
+  - 缓存故障降级为不限流（避免拖垮服务）
 - **优先级**：P1
 - **工作量**：1 天
 

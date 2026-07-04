@@ -284,7 +284,27 @@ class PermissionChecker:
 
 - **审计日志**：全量记录（操作人/时间/输入哈希/输出摘要/Tool/耗时），留存6个月+
 - **回滚机制**：关键Skill定义`rollback_handler`，执行前快照，失败/拒绝时回滚
-- **数据脱敏**：Utils层`Crypto.desensitize()`自动脱敏
+- **数据脱敏**：Utils层`security.desensitize()` 自动脱敏（身份证/手机/邮箱/银行卡 Luhn 校验）
+
+### P0 安全加固（已实施）
+
+**AES-CBC-256 加密**（`app/utils/security.py`）
+- 随机 IV（`os.urandom(16)`）前置于密文 + SHA-256 派生密钥
+- `encrypt_aes` / `decrypt_aes` 配对，输出格式 `iv(16B) || ciphertext`
+
+**JWT kid 密钥轮换**（`app/utils/security.py`）
+- `create_access_token` 注入 `kid` header，`decode_access_token` 支持 primary/previous 多密钥并行校验
+- 向后兼容（无 kid 走 primary）+ 主密钥失败 fallback previous（grace period）
+- 轮换配置：`JWT_SECRET` + `JWT_SECRET_PREVIOUS` + `JWT_KID_PRIMARY`
+
+**Guardrail 输入输出脱敏**（`app/domain/agent/guardrail.py`）
+- 输入侧：PII 脱敏 4 类 + prompt injection 命中即阻断（返回安全文本，不抛异常）
+- 输出侧：敏感关键词 11 个替换为 `***`，覆盖 `replier_node`（非流式）+ `_stream_final_reply`（流式）双路径
+
+**用户维度限流**（`app/middleware/rate_limit.py`）
+- Redis Lua 真令牌桶（原子 refill + consume + retry_after 计算）
+- 限流维度：优先 `user:{jwt_sub}`，无 token 走 `ip:{client_ip}`
+- 动态 Retry-After（429 header + JSON body）+ 缓存故障降级为不限流
 
 ## 十、技术栈定型
 

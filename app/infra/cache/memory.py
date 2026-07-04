@@ -10,7 +10,7 @@
 """
 import asyncio
 import time
-from typing import Optional
+from typing import Optional, Tuple
 
 from app.utils.logger import get_logger
 
@@ -61,8 +61,8 @@ class MemoryCache:
         async with self._lock:
             self._store.pop(key, None)
 
-    async def rate_limit(self, key: str, limit: int, window: int = 1) -> bool:
-        """滑动窗口限流"""
+    async def rate_limit(self, key: str, limit: int, window: int = 1) -> Tuple[bool, int]:
+        """滑动窗口限流，返回 (allowed, retry_after)"""
         now = time.time()
         async with self._lock:
             bucket = self._rate_buckets.setdefault(key, [])
@@ -70,9 +70,11 @@ class MemoryCache:
             cutoff = now - window
             bucket[:] = [t for t in bucket if t > cutoff]
             if len(bucket) >= limit:
-                return False
+                # 计算最早一个请求何时过期，作为 retry_after
+                retry_after = max(1, int(bucket[0] + window - now))
+                return False, retry_after
             bucket.append(now)
-            return True
+            return True, 0
 
     async def ping(self) -> bool:
         return True

@@ -56,7 +56,7 @@ Version: 1.0.0
 - SKILL_NOT_FOUND: Skill不存在
 - SKILL_DISABLED: Skill已禁用
 - WORKFLOW_INVALID: 工作流定义无效
-- RATE_LIMITED: 频率限制
+- RATE_LIMITED: 频率限制（429，响应含 `retry_after` 字段 + `Retry-After` header，单位秒；限流维度：优先 user:{jwt_sub}，无 token 走 ip:{client_ip}）
 - IM_CHANNEL_ERROR: IM渠道错误
 - INTERNAL_ERROR: 内部错误
 

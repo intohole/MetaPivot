@@ -37,6 +37,16 @@ async def validate_config() -> list[str]:
     if settings.jwt_secret in ("change_me_please", "please_change_this"):
         warnings.append("JWT_SECRET 使用默认值，生产环境必须修改！")
 
+    # 2.1 JWT_SECRET_PREVIOUS（轮换密钥校验）
+    if settings.jwt_secret_previous:
+        if len(settings.jwt_secret_previous) < _MIN_SECRET_LEN:
+            warnings.append(
+                f"JWT_SECRET_PREVIOUS 长度 {len(settings.jwt_secret_previous)} < {_MIN_SECRET_LEN}，"
+                "轮换密钥强度不足。"
+            )
+        if settings.jwt_secret_previous == settings.jwt_secret:
+            warnings.append("JWT_SECRET_PREVIOUS 与 JWT_SECRET 相同，轮换无意义。")
+
     # 3. ENCRYPT_KEY 长度
     if len(settings.encrypt_key) != _EXPECTED_ENCRYPT_KEY_LEN:
         warnings.append(
