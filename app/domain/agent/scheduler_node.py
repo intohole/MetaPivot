@@ -28,6 +28,7 @@ async def scheduler_node(state: AgentState) -> dict:
     run_at_str = sched_dict.get("run_at")
     run_at = datetime.fromisoformat(run_at_str) if run_at_str else None
     recurring = sched_dict.get("recurring", "none")
+    cron_expr = sched_dict.get("cron_expr", "")
     task_message = sched_dict.get("task_message", "")
     description = sched_dict.get("description", "")
 
@@ -37,6 +38,7 @@ async def scheduler_node(state: AgentState) -> dict:
             message=task_message,
             run_at=run_at,
             recurring=recurring,
+            cron_expr=cron_expr,
             chat_id=state.chat_id,
             user_id=state.user_id,
             channel=state.channel,
@@ -44,7 +46,12 @@ async def scheduler_node(state: AgentState) -> dict:
             description=description,
         )
         # 构造用户可读的回复
-        time_desc = run_at.strftime("%Y-%m-%d %H:%M") if run_at else f"周期({recurring})"
+        if cron_expr:
+            time_desc = f"Cron: {cron_expr}"
+        elif run_at:
+            time_desc = run_at.strftime("%Y-%m-%d %H:%M")
+        else:
+            time_desc = f"周期({recurring})"
         answer = (
             f"已创建定时任务（ID: {task_id}）\n"
             f"执行时间：{time_desc}\n"

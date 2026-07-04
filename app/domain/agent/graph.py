@@ -24,14 +24,14 @@ from app.domain.agent.replier import replier_node
 from app.domain.agent.scheduler_node import scheduler_node
 from app.domain.agent.prompts import REPLY_PROMPT, SYSTEM_PROMPT
 from app.domain.agent.state import AgentMode, AgentState, AgentStatus
+from app.utils.config import settings
 from app.utils.logger import get_logger
 
 log = get_logger("agent_graph")
 
 # 单步执行超时（秒）
 _STEP_TIMEOUT = 120
-# 最大循环次数保护
-_MAX_LOOP = 15
+# Phase 1: 移除 _MAX_LOOP，统一用 state.max_steps 控制（消除语义重叠）
 
 
 async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
@@ -70,11 +70,8 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
             state.status = AgentStatus.COMPLETED
             return
 
-        # 3. 执行循环（并行工具调用）
-        loop_count = 0
-        while loop_count < _MAX_LOOP:
-            loop_count += 1
-
+        # 3. 执行循环（并行工具调用）— Phase 1: 统一用 max_steps 控制循环上限
+        while state.current_step < state.max_steps:
             if state.status == AgentStatus.COMPLETED:
                 break
 
@@ -101,6 +98,20 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
                 if state.status == AgentStatus.WAITING_CONFIRM:
                     yield _event("human_confirm_required", state.pending_confirm or {})
                     return  # 暂停，等待 confirm 恢复
+                # Phase 1: L4 Judge 评估（每 K 步，仅非终态时触发）
+                if state.status in (AgentStatus.EXECUTING, AgentStatus.REFLECTING):
+                    try:
+                        from app.domain.agent.judge import get_judge
+                        judge = get_judge()
+                        if judge.should_run(state, settings.agent_judge_k):
+                            verdict = await judge.evaluate(state)
+                            if verdict["verdict"] == "stop":
+                                state.status = AgentStatus.COMPLETED
+                            elif verdict["verdict"] == "failed":
+                                state.status = AgentStatus.FAILED
+                                state.error = {"code": "JUDGE_FAILED", "message": verdict["reason"]}
+                    except Exception as e:
+                        log.warning("Judge evaluation crashed, fallback to continue: {}", e)
                 continue
 
             if state.status == AgentStatus.WAITING_CONFIRM:

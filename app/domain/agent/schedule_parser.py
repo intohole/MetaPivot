@@ -1,17 +1,21 @@
 """定时任务解析器 - 从用户消息中解析调度意图
 
-策略：
-1. 快速关键词预筛（"明天"/"每天"/"下午"/"提醒"等），无关键词直接返回 is_scheduled=false
-2. LLM 精细解析（SCHEDULE_PARSE_PROMPT），输出结构化 {run_at, recurring, task_message}
-3. LLM 失败时降级为关键词规则匹配（兜底）
+三层架构（Phase 5）：
+1. L1 正则预筛（cron_regex.try_match）：覆盖约 70% 高频中文模式（"每天 9 点"等），
+   命中即直接输出 cron_expr，避免 LLM 成本
+2. L2 LLM 解析（SCHEDULE_PARSE_PROMPT）：L1 未命中时调用 LLM 精细解析，
+   输出结构化 {run_at, recurring, cron_expr, task_message}
+3. L3 关键词兜底（_keyword_parse）：LLM 失败时降级为关键词规则匹配
 
-输出：ScheduleParseResult dataclass
+输出：ScheduleParseResult dataclass（含 cron_expr 优先于 recurring）
 """
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Optional
 
+from app.domain.agent.cron_helper import is_valid_cron
+from app.domain.agent.cron_regex import try_match as _regex_match
 from app.domain.agent.prompts import SCHEDULE_PARSE_PROMPT
 from app.utils.logger import get_logger
 
@@ -22,6 +26,7 @@ _SCHEDULE_KEYWORDS = (
     "明天", "后天", "下周", "每天", "每周", "每月", "每月",
     "提醒", "定时", "定时任务", "下午", "上午",
     "点", "点钟", "之后", "稍后", "later",
+    "工作日", "周末", "每小时", "每分钟",
 )
 
 
@@ -31,6 +36,7 @@ class ScheduleParseResult:
     is_scheduled: bool = False
     run_at: Optional[datetime] = None
     recurring: str = "none"  # none/daily/weekly/monthly
+    cron_expr: str = ""  # 标准 cron 表达式（优先于 recurring）
     task_message: str = ""
     description: str = ""
 
@@ -39,6 +45,7 @@ class ScheduleParseResult:
             "is_scheduled": self.is_scheduled,
             "run_at": self.run_at.isoformat() if self.run_at else None,
             "recurring": self.recurring,
+            "cron_expr": self.cron_expr,
             "task_message": self.task_message,
             "description": self.description,
         }
@@ -47,7 +54,7 @@ class ScheduleParseResult:
 def has_schedule_intent(message: str) -> bool:
     """快速预筛：消息是否包含定时意图关键词
 
-    在调用 LLM 之前用，避免每条消息都触发 LLM 解析（成本控制）。
+    在调用 L1/L2 之前用，避免每条消息都触发解析（成本控制）。
     """
     if not message or len(message) < 4:
         return False
@@ -59,6 +66,8 @@ async def parse_schedule(
 ) -> ScheduleParseResult:
     """解析消息中的定时任务意图
 
+    三层架构：L1 正则 → L2 LLM → L3 关键词兜底
+
     Args:
         message: 用户原始消息
         llm_provider: LLM Provider 实例
@@ -69,15 +78,30 @@ async def parse_schedule(
     if not has_schedule_intent(message):
         return ScheduleParseResult()
 
-    # LLM 解析
+    # L1: 正则预筛（覆盖约 70% 高频场景，避免 LLM 成本）
+    m = _regex_match(message)
+    if m.matched and is_valid_cron(m.cron_expr):
+        log.info("L1 regex matched: cron='{}' msg='{}'", m.cron_expr, m.task_message[:50])
+        return ScheduleParseResult(
+            is_scheduled=True,
+            cron_expr=m.cron_expr,
+            task_message=m.task_message,
+            description=m.description,
+        )
+
+    # L2: LLM 解析
     try:
         result = await _llm_parse(message, llm_provider)
         if result is not None:
+            # 校验 cron_expr 合法性（LLM 可能输出无效表达式）
+            if result.cron_expr and not is_valid_cron(result.cron_expr):
+                log.warning("LLM output invalid cron_expr={}, fallback to recurring", result.cron_expr)
+                result.cron_expr = ""
             return result
     except Exception as e:
         log.warning("LLM parse_schedule failed: {}", e)
 
-    # 兜底：关键词规则
+    # L3: 关键词兜底
     return _keyword_parse(message)
 
 
@@ -104,17 +128,22 @@ async def _llm_parse(message: str, llm_provider: object) -> Optional[SchedulePar
     recurring = parsed.get("recurring", "none")
     if recurring not in ("none", "daily", "weekly", "monthly"):
         recurring = "none"
+    cron_expr = (parsed.get("cron_expr") or "").strip()
+    # cron_expr 非空时 recurring 置 none（cron 优先）
+    if cron_expr:
+        recurring = "none"
     task_message = (parsed.get("task_message") or message).strip()
     description = (parsed.get("description") or "")[:50]
 
     log.info(
-        "Schedule parsed: run_at={} recurring={} msg='{}'",
-        run_at, recurring, task_message[:50],
+        "LLM parsed: run_at={} recurring={} cron='{}' msg='{}'",
+        run_at, recurring, cron_expr, task_message[:50],
     )
     return ScheduleParseResult(
         is_scheduled=True,
         run_at=run_at,
         recurring=recurring,
+        cron_expr=cron_expr,
         task_message=task_message,
         description=description,
     )

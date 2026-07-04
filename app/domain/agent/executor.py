@@ -37,6 +37,7 @@ async def execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
     """执行单个工具调用（可并行，无状态副作用）
 
     流程：
+    0. 内置工具早分支（finish / delegate_to_subagent）— Phase 1
     1. 解析 tool_call arguments（JSON）
     2. 查找 skill_id（不存在则 failed）
     3. 检查 HITL（require_confirm=True 则 waiting_confirm，不执行）
@@ -52,6 +53,28 @@ async def execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
         args = json.loads(tc.function.arguments) if tc.function.arguments else {}
     except json.JSONDecodeError:
         args = {}
+
+    # Phase 1: 内置工具早分支（不经过 skill_service，避免污染业务工具）
+    if tool_name == "finish":
+        summary = args.get("summary", "")
+        return StepRecord(
+            step_index=state.current_step, step_name="call_finish",
+            tool_name="finish", tool_input=args, status="finish",
+            tool_output={"summary": summary}, duration_ms=0,
+        )
+    if tool_name == "delegate_to_subagent":
+        from app.domain.agent.sub_agent import spawn_sub_agent
+        message = args.get("message", "")
+        max_steps = args.get("max_steps", 5)
+        sub_result = await spawn_sub_agent(state, message, max_steps)
+        # 子代理 token 用量累计到父任务
+        state.total_tokens += int(sub_result.get("tokens", 0))
+        return StepRecord(
+            step_index=state.current_step, step_name="call_delegate",
+            tool_name="delegate_to_subagent", tool_input=args, status="success",
+            tool_output=sub_result, duration_ms=int((datetime.now() - started).total_seconds() * 1000),
+            token_usage={"total_tokens": sub_result.get("tokens", 0)},
+        )
 
     step = StepRecord(
         step_index=state.current_step, step_name=f"call_{tool_name}",

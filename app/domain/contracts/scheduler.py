@@ -27,6 +27,7 @@ class IScheduler(Protocol):
         message: str,
         run_at: Optional[datetime] = None,
         recurring: str = "none",
+        cron_expr: str = "",
         chat_id: str = "",
         user_id: str = "",
         channel: str = "api",
@@ -38,7 +39,8 @@ class IScheduler(Protocol):
         Args:
             message: 触发时执行的 message（去掉时间描述后的核心诉求）
             run_at: 一次性任务的执行时间（None + recurring!="none" 时按周期计算）
-            recurring: none/daily/weekly/monthly
+            recurring: none/daily/weekly/monthly（cron_expr 为空时使用）
+            cron_expr: 标准 5 段 cron 表达式（优先于 recurring，如 "0 9 * * 1-5" 工作日 9 点）
             chat_id: 触发源会话 ID（用于回调到原会话）
             user_id: 创建者
             channel: 渠道（api/im_dingtalk/...）
@@ -62,6 +64,24 @@ class IScheduler(Protocol):
         self, user_id: str = "", limit: int = 50
     ) -> list[dict]:
         """查询待执行的定时任务"""
+        ...
+
+    async def list_dlq(
+        self, user_id: str = "", page: int = 1, page_size: int = 20
+    ) -> dict:
+        """查询死信队列（retry_count >= max_retries 的 failed 任务）
+
+        Returns:
+            {"items": [...], "total": int, "page": int, "page_size": int}
+        """
+        ...
+
+    async def retry_failed(self, task_id: int, user_id: str = "") -> bool:
+        """手动重试失败任务（重置 retry_count=0，状态回 pending，重新入队）
+
+        Returns:
+            True 重试成功，False 任务不存在/状态非 failed/无权操作
+        """
         ...
 
     async def start(self) -> None:

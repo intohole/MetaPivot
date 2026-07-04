@@ -103,6 +103,27 @@ class AgentTaskStepORM(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
 
 
+class AgentTaskEventORM(Base):
+    """Agent 任务事件表（Phase 4 会话重放 + 链路可见性）
+
+    记录每个 Agent step 的节点级事件（step_started/llm_call/tool_call/step_completed 等），
+    用于会话重放（GET /tasks/{id}/replay）和调试。
+    fire-and-forget 持久化（asyncio.create_task），不阻塞主链路。
+    """
+    __tablename__ = "agent_task_events"
+
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer(), "sqlite"),
+        primary_key=True, autoincrement=True,
+    )
+    task_id: Mapped[str] = mapped_column(String(36), ForeignKey("agent_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    event_data: Mapped[dict] = mapped_column(JSON, default=dict)
+    step_index: Mapped[Optional[int]] = mapped_column(Integer)
+    request_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False, index=True)
+
+
 class AuditLogORM(Base):
     """审计日志表（留存6个月+）"""
     __tablename__ = "audit_logs"
@@ -225,10 +246,14 @@ class ChatSummaryORM(Base):
 class ScheduledTaskORM(Base):
     """定时任务表（用户对话中解析出的定时任务）
 
-    场景：用户在 IM 对话中说"明天下午3点提醒我开会"或"每天早上9点查询订单状态"，
+    场景：用户在 IM 对话中说"明天下午3点提醒我开会"或"工作日 9 点查询订单"，
     Agent 解析后创建定时任务，由 AsyncScheduler 在到点时触发执行。
 
-    支持一次性（run_at 指定，recurring="none"）和周期性（recurring="daily/weekly/monthly"）。
+    Phase 5 增强：
+    - 支持 cron_expr（标准 5 段 cron，优先于 recurring）
+    - DLQ：retry_count/max_retries/next_retry_at/last_error
+      失败时 retry_count += 1，< max_retries 指数退避重试，>= max_retries 进入 DLQ
+
     状态机：pending → running → completed/failed/cancelled
     """
     __tablename__ = "scheduled_tasks"
@@ -248,10 +273,16 @@ class ScheduledTaskORM(Base):
     # 调度
     run_at: Mapped[Optional[datetime]] = mapped_column(index=True)  # 一次性任务的执行时间
     recurring: Mapped[str] = mapped_column(String(20), default="none")  # none/daily/weekly/monthly
-    next_run_at: Mapped[Optional[datetime]] = mapped_column(index=True)  # 下次执行时间（周期性）
+    cron_expr: Mapped[Optional[str]] = mapped_column(String(64), index=True)  # 标准 5 段 cron（优先于 recurring）
+    next_run_at: Mapped[Optional[datetime]] = mapped_column(index=True)  # 下次执行时间
     last_run_at: Mapped[Optional[datetime]] = mapped_column()
     # 状态
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)  # pending/running/completed/failed/cancelled
+    # DLQ 字段（Phase 5）
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)  # 已重试次数
+    max_retries: Mapped[int] = mapped_column(Integer, default=3)  # 最大重试次数
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(index=True)  # 下次重试时间（指数退避）
+    last_error: Mapped[Optional[dict]] = mapped_column(JSON)  # 最近一次错误信息
     error: Mapped[Optional[dict]] = mapped_column(JSON)
     # 审计
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False, index=True)

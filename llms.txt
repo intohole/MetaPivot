@@ -131,6 +131,12 @@ Body: `{decision*:string="approve"|"reject"|"modify", modifications?:object}`
 ### POST /api/v1/agent/tasks/{task_id}/cancel - 取消任务 | JWT
 200: `{task_id:string, status:string="cancelled"}`
 
+### GET /api/v1/agent/tasks/{task_id}/replay - 会话重放 | JWT
+200: `{task:object, events:array<{event_type:string, event_data:object, step_index:integer, created_at:string}>, langfuse_url:string}`
+注: 返回 Agent 任务事件流（step_started/llm_call/tool_call/step_completed 等），用于会话重放与调试；langfuse_url 为 Langfuse trace 链接（未启用时为空）
+403: AUTH_PERMISSION_DENIED（仅 admin 可查他人任务）
+404: AGENT_TASK_NOT_FOUND
+
 ---
 
 ## 工作流组
@@ -224,6 +230,46 @@ Params: `?page=integer&page_size=integer&user_id=string&action=string&skill_id=s
 ### GET /api/v1/audit/stats - 审计统计 | JWT(需admin)
 Params: `?start_time=string&end_time=string&group_by=string="day"|"user"|"skill"`
 200: `{stats:array<{key:string, count:integer, success_rate:number, avg_duration_ms:integer}>, total:integer}`
+
+---
+
+## 定时任务组
+
+### POST /api/v1/schedules - 创建定时任务 | JWT
+Body: `{message*:string, run_at?:string, recurring?:string="none", cron_expr?:string, chat_id?:string, description?:string}`
+- 优先级: cron_expr > run_at > recurring
+- cron_expr: 标准 5 段 cron（如 "0 9 * * 1-5" 工作日 9 点）
+- recurring: none/daily/weekly/monthly（cron_expr 为空时使用）
+- run_at: ISO8601 时间（一次性任务）
+201: `{task_id:integer, status:string="pending"}`
+
+### GET /api/v1/schedules - 查询定时任务列表 | JWT
+Params: `?page=1&page_size=20`
+200: `{items:array, total:integer, page:integer, page_size:integer}`
+
+### GET /api/v1/schedules/{task_id} - 查询单个定时任务 | JWT
+200: `{id:integer, message:string, cron_expr:string, next_run_at:string, status:string, retry_count:integer, ...}`
+404: NOT_FOUND
+
+### DELETE /api/v1/schedules/{task_id} - 取消定时任务 | JWT
+200: `{task_id:integer, status:string="cancelled"}`
+400: VALIDATION_ERROR
+
+### GET /api/v1/schedules/dlq - 查询死信队列 | JWT
+Params: `?page=1&page_size=20`
+200: `{items:array, total:integer, page:integer, page_size:integer}`
+注: 返回 retry_count >= max_retries 的 failed 任务，按 updated_at 倒序
+
+### POST /api/v1/schedules/dlq/{task_id}/retry - 手动重试死信任务 | JWT
+Body: `{}`
+200: `{task_id:integer, status:string="pending"}`
+404: NOT_FOUND
+注: 重置 retry_count=0，状态回 pending，立即入队
+
+### POST /api/v1/schedules/dlq/{task_id}/cancel - 放弃死信任务 | JWT
+Body: `{}`
+200: `{task_id:integer, status:string="cancelled"}`
+404: NOT_FOUND
 
 ---
 

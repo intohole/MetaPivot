@@ -13,10 +13,12 @@
 import asyncio
 from datetime import datetime
 from typing import AsyncGenerator, Optional
+from uuid import uuid4
 
 from app.domain.agent.graph import resume_agent, run_agent
 from app.domain.agent.state import AgentState, AgentStatus
 from app.domain.agent.stream import stream_manager
+from app.domain.contracts.judge import IJudge
 from app.domain.contracts.memory import IMemoryStore
 from app.infra.db.models_core import AgentTaskORM
 from app.infra.db.session import get_db_session
@@ -31,6 +33,7 @@ from app.service.agent_persister import (
     update_task_status,
 )
 from app.utils.config import settings
+from app.utils.context import get_request_id, get_trace_id, set_request_context
 from app.utils.logger import get_logger
 from app.utils.metrics import agent_task_finished, record_agent_task
 from app.utils.response import AppError, ErrorCode
@@ -45,6 +48,8 @@ class AgentService:
     _running_tasks: dict[str, asyncio.Task] = {}
     # 多轮对话记忆存储（DI 注入，避免 Domain 层直接依赖 Infra）
     _memory_store: Optional[IMemoryStore] = None
+    # L4 Judge 评估器（DI 注入，保留扩展点；当前 graph.py 直接用 get_judge 单例）
+    _judge: Optional[IJudge] = None
 
     def set_memory_store(self, store: IMemoryStore) -> None:
         """DI 注入记忆存储（由 main.py lifespan 调用）
@@ -54,6 +59,16 @@ class AgentService:
         """
         self._memory_store = store
         log.info("MemoryStore injected into AgentService")
+
+    def set_judge(self, judge: IJudge) -> None:
+        """DI 注入 Judge 评估器（由 main.py lifespan 调用）
+
+        保留扩展点：当前 graph.py 直接 from app.domain.agent.judge import get_judge
+        调用单例；后续若需多 backend（如规则 Judge / 远程 Judge 服务），
+        可通过此方法注入自定义 IJudge 实现。
+        """
+        self._judge = judge
+        log.info("Judge injected into AgentService")
 
     # ============ 任务生命周期 ============
 
@@ -71,6 +86,11 @@ class AgentService:
         stream 参数保留用于 API 兼容（SSE 通过 stream_task 订阅）。
         """
         _ = stream  # API 兼容参数
+        # 生成 request_id/trace_id（用于跨任务日志关联 + Phase 4 OTel Baggage 传播）
+        rid = get_request_id() or f"task-{uuid4().hex[:8]}"
+        tid = get_trace_id() or rid
+        if not get_request_id():
+            set_request_context(rid, user_id=user_id or "")
         async with get_db_session() as session:
             task_orm = AgentTaskORM(
                 user_id=user_id or None,
@@ -78,6 +98,8 @@ class AgentService:
                 chat_id=chat_id or None,
                 original_message=message,
                 status="pending",
+                request_id=rid,
+                trace_id=tid,
             )
             session.add(task_orm)
             await session.flush()
@@ -99,12 +121,13 @@ class AgentService:
         self, task_id: str, message: str, channel: str,
         chat_id: str, user_id: str, context: dict,
     ) -> None:
-        """后台执行 Agent 状态机"""
-        from app.utils.context import get_request_id, set_request_context
-        request_id = get_request_id()
-        if not request_id:
-            import uuid as _uuid
-            request_id = f"task-{_uuid.uuid4().hex[:8]}"
+        """后台执行 Agent 状态机
+
+        Phase 1: 用 asyncio.wait_for 包裹 _consume_agent，实现任务级超时
+        （settings.agent_task_timeout，默认 300s），超时写 FAILED + persist_state。
+        """
+        request_id = get_request_id() or f"task-{uuid4().hex[:8]}"
+        if not get_request_id():
             set_request_context(request_id, user_id=user_id or "")
 
         started_at = datetime.now()
@@ -120,19 +143,77 @@ class AgentService:
             task_id=task_id, user_id=user_id, channel=channel, chat_id=chat_id,
             original_message=message, context=context, max_steps=settings.llm_max_steps,
             messages=list(history_messages), started_at=started_at,
+            request_id=request_id, trace_id=get_trace_id() or request_id,
         )
         await persist_state(task_id, state)
 
+        runner = asyncio.create_task(
+            self._consume_agent(task_id, state, started_at, request_id, is_resume=False)
+        )
         try:
-            async for event in run_agent(state):
+            await asyncio.wait_for(runner, timeout=settings.agent_task_timeout)
+        except asyncio.TimeoutError:
+            runner.cancel()
+            state.status = AgentStatus.FAILED
+            state.error = {
+                "code": "TASK_TIMEOUT",
+                "message": f"任务超过 {settings.agent_task_timeout}s",
+            }
+            await persist_state(task_id, state)
+            await update_task_status(
+                task_id, "failed", None, state.error,
+                total_tokens=state.total_tokens, started_at=started_at,
+            )
+            await stream_manager.publish(task_id, {"type": "error", "data": state.error})
+        finally:
+            duration = (datetime.now() - started_at).total_seconds() if started_at else None
+            stream_manager.mark_finished(task_id)
+            agent_task_finished()
+            record_agent_task(state.status.value, duration)
+            await audit_task_result(task_id, user_id, channel, message, state, started_at, request_id)
+            asyncio.get_running_loop().call_later(300, stream_manager.cleanup, task_id)
+
+    async def _consume_agent(
+        self,
+        task_id: str,
+        state: AgentState,
+        started_at: datetime,
+        request_id: str,
+        is_resume: bool = False,
+    ) -> None:
+        """Agent 主循环消费者（被 _run_task/_resume_task 用 asyncio.wait_for 包裹）
+
+        is_resume=True 时调用 resume_agent（HITL 恢复），否则调用 run_agent。
+        异常在此捕获并写 FAILED，外层 wait_for 不会 raise（除非超时）。
+        Phase 4: 入口 attach_user_baggage 传播 OTel Baggage；每个事件 fire-and-forget persist_event。
+        """
+        # Phase 4: Baggage 跨 asyncio.create_task 传播（contextvars 不自动跨 task）
+        from app.infra.observability.baggage import attach_user_baggage, detach_user_baggage
+        baggage_token = attach_user_baggage(state.user_id, state.chat_id, task_id)
+
+        # Phase 4: persist_event import（fire-and-forget 事件持久化，会话重放用）
+        from app.service.agent_persister import persist_event
+
+        runner_fn = resume_agent if is_resume else run_agent
+        try:
+            async for event in runner_fn(state):
                 await stream_manager.publish(task_id, event)
                 await persist_state(task_id, state)
+                # Phase 4: fire-and-forget 持久化事件（不阻塞主链路）
+                ev_type = event.get("type", "")
+                ev_data = event.get("data", {})
+                asyncio.create_task(persist_event(
+                    task_id=task_id, event_type=ev_type, event_data=ev_data,
+                    step_index=state.current_step, request_id=request_id,
+                ))
             await persist_steps(task_id, state)
             await update_task_status(
                 task_id, state.status.value, state.result, state.error,
                 total_tokens=state.total_tokens, started_at=started_at,
             )
-            await self._persist_to_memory(chat_id, message, state.final_answer)
+            if not is_resume:
+                # 仅首次执行时持久化到记忆存储（恢复时不重复写用户消息）
+                await self._persist_to_memory(state.chat_id, state.original_message, state.final_answer)
         except Exception as e:
             log.exception("Agent task {} crashed: {}", task_id, e)
             state.status = AgentStatus.FAILED
@@ -142,14 +223,11 @@ class AgentService:
                 task_id, "failed", None, state.error,
                 total_tokens=state.total_tokens, started_at=started_at,
             )
-            await self._persist_to_memory(chat_id, message, "")
+            if not is_resume:
+                await self._persist_to_memory(state.chat_id, state.original_message, "")
         finally:
-            duration = (datetime.now() - started_at).total_seconds() if started_at else None
-            stream_manager.mark_finished(task_id)
-            agent_task_finished()
-            record_agent_task(state.status.value, duration)
-            await audit_task_result(task_id, user_id, channel, message, state, started_at, request_id)
-            asyncio.get_running_loop().call_later(300, stream_manager.cleanup, task_id)
+            # Phase 4: Baggage detach（与 attach 配对）
+            detach_user_baggage(baggage_token)
 
     async def _persist_to_memory(
         self, chat_id: str, user_message: str, assistant_answer: str
@@ -233,30 +311,30 @@ class AgentService:
         return {"task_id": task_id, "status": "executing"}
 
     async def _resume_task(self, task_id: str, state: AgentState) -> None:
-        """恢复 HITL 暂停的任务"""
-        from app.utils.context import get_request_id, set_request_context
-        request_id = get_request_id()
-        if not request_id:
-            import uuid as _uuid
-            request_id = f"resume-{_uuid.uuid4().hex[:8]}"
+        """恢复 HITL 暂停的任务（与 _run_task 对称：asyncio.wait_for 包裹 _consume_agent）"""
+        request_id = get_request_id() or f"resume-{uuid4().hex[:8]}"
+        if not get_request_id():
             set_request_context(request_id, user_id=state.user_id or "")
 
         started_at = state.started_at or datetime.now()
+        runner = asyncio.create_task(
+            self._consume_agent(task_id, state, started_at, request_id, is_resume=True)
+        )
         try:
-            async for event in resume_agent(state):
-                await stream_manager.publish(task_id, event)
-                await persist_state(task_id, state)
-            await persist_steps(task_id, state)
+            await asyncio.wait_for(runner, timeout=settings.agent_task_timeout)
+        except asyncio.TimeoutError:
+            runner.cancel()
+            state.status = AgentStatus.FAILED
+            state.error = {
+                "code": "TASK_TIMEOUT",
+                "message": f"任务超过 {settings.agent_task_timeout}s",
+            }
+            await persist_state(task_id, state)
             await update_task_status(
-                task_id, state.status.value, state.result, state.error,
+                task_id, "failed", None, state.error,
                 total_tokens=state.total_tokens, started_at=started_at,
             )
-        except Exception as e:
-            log.exception("Agent resume {} failed: {}", task_id, e)
-            await update_task_status(
-                task_id, "failed", None, {"message": str(e)},
-                total_tokens=state.total_tokens, started_at=started_at,
-            )
+            await stream_manager.publish(task_id, {"type": "error", "data": state.error})
         finally:
             duration = (datetime.now() - started_at).total_seconds() if started_at else None
             stream_manager.mark_finished(task_id)

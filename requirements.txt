@@ -64,3 +64,11 @@ aiohttp==3.11.11
 python-dotenv==1.0.1
 tenacity==9.0.0
 orjson==3.10.12
+
+# 链路追踪（Phase 4 OTel + Langfuse）
+opentelemetry-sdk==1.27.0
+opentelemetry-exporter-otlp==1.27.0
+opentelemetry-instrumentation-fastapi==0.48b0
+
+# cron 表达式解析（Phase 5 定时任务）
+croniter==2.0.0

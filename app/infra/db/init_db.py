@@ -7,6 +7,7 @@ from app.infra.db.session import async_session_factory, engine, Base
 from app.infra.db.models_user_skill import UserORM, SkillORM, MCPServerORM
 from app.infra.db.models_core import (
     WorkflowORM, WorkflowExecutionORM, AgentTaskORM, AgentTaskStepORM,
+    AgentTaskEventORM,
     AuditLogORM, KnowledgeDocumentORM, IMChatORM, IMMessageORM, ConfigORM,
     ChatMessageORM, ChatSummaryORM, ScheduledTaskORM,
 )

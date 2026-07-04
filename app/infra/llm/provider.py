@@ -2,7 +2,7 @@
 
 集成熔断器：连续失败自动熔断，避免雪崩。
 """
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -41,8 +41,9 @@ class LLMProvider:
         allowed, reason = await breaker.allow_request()
         if not allowed:
             log.warning("LLM call blocked by circuit breaker: {}", reason)
+            # Phase 1: 熔断降级返回明确文案（非 None），避免 executor 误判为正常空回复
             return {
-                "content": None,
+                "content": f"【服务降级】LLM 熔断中（{reason}），请稍后重试。",
                 "tool_calls": None,
                 "finish_reason": "circuit_open",
                 "error": reason,
@@ -91,8 +92,13 @@ class LLMProvider:
         messages: list[dict],
         tools: Optional[list[dict]] = None,
         temperature: Optional[float] = None,
+        usage_callback: Optional[Callable[[dict], Awaitable[None]]] = None,
     ) -> AsyncIterator[str]:
-        """流式对话补全（集成熔断器）"""
+        """流式对话补全（集成熔断器 + usage 回调）
+
+        Args:
+            usage_callback: 流式结束时的 usage 回调（Phase 4 用于 Token 用量采集）
+        """
         from app.infra.llm.circuit_breaker import get_circuit_breaker
         breaker = get_circuit_breaker()
         allowed, reason = await breaker.allow_request()
@@ -105,17 +111,30 @@ class LLMProvider:
             "messages": messages,
             "temperature": temperature if temperature is not None else settings.llm_temperature,
             "stream": True,
+            # Phase 4: 启用 stream usage 采集（OpenAI 标准方式）
+            "stream_options": {"include_usage": True},
         }
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
+        usage: Optional[dict] = None
         try:
             stream = await self.client.chat.completions.create(**kwargs)
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
+                # Phase 4: 流式 usage 在最后一个 chunk 返回
+                if chunk.usage:
+                    usage = {
+                        "prompt_tokens": chunk.usage.prompt_tokens,
+                        "completion_tokens": chunk.usage.completion_tokens,
+                        "total_tokens": chunk.usage.total_tokens,
+                    }
             await breaker.record_success()
+            # Phase 4: 流式结束后回调 usage（非阻塞主流程）
+            if usage and usage_callback:
+                await usage_callback(usage)
         except Exception as e:
             await breaker.record_failure()
             log.error("LLM stream failed: {}", e)

@@ -383,4 +383,52 @@ replier_node → final_result{answer,usage}
 - `finished_at` — 接近终态（`update_task_status` 在 try/except 块设置）
 - `duration_ms` — ORM `__init__` 计算的 `finished_at - created_at` 毫秒数
 
+### 十三、定时任务调度（Phase 5）
+
+#### NL→cron 三层解析架构
+
+用户在 IM 对话中表达定时意图时，Agent 走三层解析：
+
+1. **L1 正则预筛**（`app/domain/agent/cron_regex.py`）
+   - 覆盖约 70% 高频中文时间模式
+   - 支持：每天/每日/工作日/周末/每周X/每月X号/每小时/每N分钟/每N小时
+   - 上午/下午修饰：`下午 3 点` → 15:00
+   - 命中即直接输出 cron_expr，避免 LLM 成本
+
+2. **L2 LLM 解析**（`app/domain/agent/schedule_parser.py::_llm_parse`）
+   - L1 未命中时调用 LLM
+   - 输出含 `cron_expr` 优先于 `recurring`
+   - LLM 输出的 cron_expr 经 `cron_helper.is_valid_cron` 校验，无效则降级到 recurring
+
+3. **L3 关键词兜底**（`schedule_parser._keyword_parse`）
+   - LLM 不可用时降级为关键词规则匹配
+   - 输出 recurring=none/daily/weekly/monthly + run_at
+
+#### AsyncScheduler 设计
+
+**单进程零外部依赖**（适合小企业单机部署）：
+- 基于 `asyncio` + DB 轮询（`_POLL_INTERVAL=30s`）
+- 触发执行调用 `AgentService.start_task`（asyncio.create_task 异步非阻塞）
+- 不依赖 Redis/Celery
+
+**Phase 5 增强**：
+- **cron_expr 优先**：`schedule()` 接受 `cron_expr` 参数，优先用 `croniter` 计算 `next_run_at`，比 `timedelta(days=1)` 精确（跨月/闰年/工作日）
+- **DLQ + 指数退避**：`_handle_failure` 失败时 `retry_count += 1`，`< max_retries`（默认 3）按 `2^n * 60s` 退避重试，`>= max_retries` 进入 DLQ
+- **PostgreSQL 多实例防重**：`_trigger_due_tasks` 在 PostgreSQL 后端用 `SELECT ... FOR UPDATE SKIP LOCKED`，SQLite 单机无需
+
+#### DLQ 死信队列
+
+| 状态 | 触发条件 | 处理方式 |
+|------|---------|---------|
+| `pending` | 创建/重试入队 | 等待 `next_run_at` 到期 |
+| `running` | 被轮询拉取 | 标记防重 + 异步执行 |
+| `completed` | 一次性任务执行成功 | 终态 |
+| `failed` | `retry_count >= max_retries` | 进入 DLQ，等待手动重试或放弃 |
+| `cancelled` | 用户主动取消 | 终态 |
+
+**DLQ API**：
+- `GET /api/v1/schedules/dlq` 查询死信队列
+- `POST /api/v1/schedules/dlq/{id}/retry` 重置 retry_count 重新入队
+- `POST /api/v1/schedules/dlq/{id}/cancel` 放弃任务
+
 判断任务是否真正结束应查 `finished_at` 非空（`status` 字段可能在循环中途被 `persist_state` 设为 `failed` 但任务还在执行）。

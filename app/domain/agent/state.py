@@ -99,6 +99,14 @@ class AgentState(BaseModel):
     # 任务起始时间（计算 duration_ms，落 AgentTaskORM.started_at/finished_at/duration_ms）
     started_at: Optional[datetime] = None
 
+    # Phase 1: 子代理支持（orchestrator-worker 模式）
+    parent_task_id: Optional[str] = None  # 父任务 ID（子代理场景）
+    depth: int = 0  # 递归深度（防子代理死锁，MAX_DEPTH=2）
+
+    # Phase 4: 链路追踪（request_id/trace_id 跨任务传播）
+    request_id: str = ""
+    trace_id: str = ""
+
     # 流式事件队列（仅运行时使用，不持久化）
     events: list[dict] = Field(default_factory=list, description="待推送的 SSE 事件")
 

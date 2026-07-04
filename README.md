@@ -264,6 +264,41 @@ metapivot_agent_active_tasks
 - `<` `>` 转义为 `\u003c` `\u003e` 避免 loguru Colorizer 误解析
 - 文件按天轮转，保留 3 天，错误日志独立 `logs/error_YYYY-MM-DD.log`
 
+### OpenTelemetry + Langfuse 链路追踪（Phase 4）
+
+启用 `OTEL_ENABLED=true` 后，Agent 执行链路通过 OpenTelemetry 上报到 Langfuse（或独立 OTel collector），实现会话重放与跨任务追踪。
+
+**三层 Span 体系**（OpenTelemetry GenAI semantic conventions）：
+- `trace(session)` — 用户会话级，Baggage 传播 user.id/session.id/metapivot.task_id
+- `span(agent_step)` — Agent 状态机节点（planner/executor/reflector/replier/scheduler_node）
+- `span(llm_call)` / `span(tool_call)` — LLM 调用与工具调用，含 gen_ai.* 属性
+
+**会话重放 API**：`GET /api/v1/agent/tasks/{task_id}/replay` 返回事件流 + Langfuse URL，便于事后调试。
+
+**零依赖降级**：`OTEL_ENABLED=false`（默认）时使用 `NoopTracer`，无任何外部依赖，适合小企业单机部署。
+
+### 定时任务调度（Phase 5）
+
+支持用户在 IM 对话中用自然语言创建定时任务（如"工作日 9 点查询订单"），Agent 解析后由 AsyncScheduler 调度执行。
+
+**NL→cron 三层架构**：
+1. **L1 正则预筛**（`cron_regex.try_match`）：覆盖约 70% 高频中文模式（"每天"/"工作日"/"周末"/"每周X"/"每月X号"/"每小时"/"每N分钟"），命中即直接输出 cron_expr，避免 LLM 成本
+2. **L2 LLM 解析**（`SCHEDULE_PARSE_PROMPT`）：L1 未命中时调用 LLM 精细解析，输出含 cron_expr 的结构化结果
+3. **L3 关键词兜底**：LLM 不可用时降级为关键词规则匹配
+
+**DLQ 死信队列 + 指数退避**：
+- 任务执行失败时 `retry_count += 1`，若 `< max_retries`（默认 3）按 `2^n * 60s` 指数退避重试（2min/4min/8min）
+- `retry_count >= max_retries` 进入 DLQ，可通过 `POST /api/v1/schedules/dlq/{task_id}/retry` 手动重试或 `cancel` 放弃
+
+**多实例防重**：
+- `DB_BACKEND=postgresql` 时启用 `SELECT ... FOR UPDATE SKIP LOCKED`，多实例并发执行不重复触发
+- `DB_BACKEND=sqlite` 单机无需 SKIP LOCKED
+
+**API**：
+- `POST /api/v1/schedules` 创建（支持 cron_expr/run_at/recurring 三种模式）
+- `GET /api/v1/schedules/dlq` 查询死信队列
+- `POST /api/v1/schedules/dlq/{id}/retry` 手动重试
+
 ## 安全说明
 
 - 全栈私有化部署，数据不出内网

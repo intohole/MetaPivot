@@ -25,7 +25,8 @@ class CreateScheduleRequest(BaseModel):
     """手动创建定时任务请求"""
     message: str = Field(..., min_length=1, max_length=10000, description="触发时执行的消息")
     run_at: Optional[str] = Field(None, description="ISO8601 时间（一次性任务）")
-    recurring: str = Field(default="none", description="none/daily/weekly/monthly")
+    recurring: str = Field(default="none", description="none/daily/weekly/monthly（cron_expr 为空时使用）")
+    cron_expr: str = Field(default="", description="标准 5 段 cron（如 '0 9 * * 1-5' 工作日 9 点，优先于 recurring）")
     chat_id: str = Field(default="", description="触发源会话 ID（用于回调）")
     description: str = Field(default="", description="任务描述")
 
@@ -48,6 +49,7 @@ async def create_schedule(
         message=body.message,
         run_at=run_at,
         recurring=body.recurring,
+        cron_expr=body.cron_expr,
         chat_id=body.chat_id,
         user_id=user.user_id,
         channel="api",

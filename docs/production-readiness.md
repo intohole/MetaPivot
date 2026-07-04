@@ -115,6 +115,31 @@
 - **工作量**：0.5 天（看板 + 告警规则）
 
 ### 3.2 Celery 任务队列落地
+
+> Phase 5 已实现 DLQ + 指数退避 + PostgreSQL SKIP LOCKED 多实例防重，Celery 替换为可选演进项。
+
+#### Phase 5 定时任务增强（已实施 ✅）
+
+**NL→cron 三层架构**：
+- L1 正则预筛（`cron_regex.try_match`）覆盖 70% 高频中文模式，避免 LLM 成本
+- L2 LLM 解析输出 `cron_expr`（标准 5 段 cron），用 `croniter` 计算 next_run_at
+- L3 关键词兜底
+
+**DLQ + 指数退避**：
+- 失败 `retry_count += 1`，`< max_retries`（默认 3）按 `2^n * 60s` 重试
+- `>= max_retries` 进入 DLQ，可通过 API 手动重试或放弃
+
+**多实例防重**：
+- `DB_BACKEND=postgresql` → `SELECT ... FOR UPDATE SKIP LOCKED`
+- `DB_BACKEND=sqlite` → 普通 SELECT（单机无并发问题）
+
+**演进路线**：
+- 单机起步：AsyncScheduler（asyncio + DB 轮询，零外部依赖）
+- 集群扩展：切换 `SCHEDULER_BACKEND=celery`（CeleryScheduler 待实现）
+- 调用方无感知（IScheduler Protocol 统一接口）
+
+#### Celery 演进（待实施）
+
 - **当前**：`docker-compose.yml` 已定义 worker 服务，但 `app/infra/queue/celery_app.py` 未实现
 - **目标**：
   - 长耗时任务（文档分块、批量知识入库）走 Celery

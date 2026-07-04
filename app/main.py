@@ -22,6 +22,10 @@ async def lifespan(app: FastAPI):
     setup_logger()
     log.info("Starting {} v{} ...", settings.app_name, settings.app_version)
 
+    # Phase 4: 初始化 OTel + Langfuse 链路追踪（otel_enabled=False 时使用 NoopTracer）
+    from app.infra.observability.otel import init_otel
+    init_otel()
+
     # 启动前配置校验（不阻断，仅 WARNING 日志）
     from app.utils.config_validator import validate_config
     await validate_config()
@@ -64,7 +68,7 @@ async def lifespan(app: FastAPI):
     log.info("{} started on port {}", settings.app_name, settings.app_port)
     yield
 
-    # 优雅关闭：取消在途任务 → 停 IM → 释放 scheduler/event_bus/memory/DB/cache
+    # 优雅关闭：取消在途任务 → 停 IM → 释放 scheduler/event_bus/memory/DB/cache/otel
     log.info("Shutting down {}...", settings.app_name)
     from app.service.shutdown import graceful_shutdown
     await graceful_shutdown()
@@ -76,6 +80,9 @@ async def lifespan(app: FastAPI):
     await close_memory_store()
     await close_db()
     await close_redis()
+    # Phase 4: 关闭 OTel SDK，flush 待上报 span
+    from app.infra.observability.otel import shutdown_otel
+    shutdown_otel()
     log.info("{} stopped", settings.app_name)
 
 
@@ -205,15 +212,19 @@ async def metrics():
 # 注册路由
 from app.route import im_routes, agent_routes, skill_routes, workflow_routes  # noqa: E402
 from app.route import audit_routes, admin_routes, auth_routes, knowledge_routes  # noqa: E402
-from app.route import schedule_routes  # noqa: E402
+from app.route import schedule_routes, replay_routes, dlq_routes  # noqa: E402
 
 app.include_router(auth_routes.router, prefix="/api/v1/auth", tags=["认证"])
 app.include_router(im_routes.router, prefix="/api/v1/im", tags=["IM接入"])
 app.include_router(agent_routes.router, prefix="/api/v1/agent", tags=["Agent"])
+# Phase 4: 会话重放（GET /tasks/{id}/replay 返回事件流 + Langfuse URL）
+app.include_router(replay_routes.router, prefix="/api/v1/agent", tags=["Agent"])
 app.include_router(skill_routes.router, prefix="/api/v1/skills", tags=["Skill管理"])
 app.include_router(workflow_routes.router, prefix="/api/v1/workflows", tags=["工作流"])
 app.include_router(knowledge_routes.router, prefix="/api/v1/knowledge", tags=["知识库"])
 app.include_router(audit_routes.router, prefix="/api/v1/audit", tags=["审计"])
+# Phase 5: DLQ 死信队列（必须在 schedule_routes 之前注册，避免 /schedules/{task_id} 拦截 /schedules/dlq）
+app.include_router(dlq_routes.router, prefix="/api/v1/schedules/dlq", tags=["定时任务DLQ"])
 app.include_router(schedule_routes.router, prefix="/api/v1/schedules", tags=["定时任务"])
 app.include_router(admin_routes.router, prefix="/api/v1", tags=["管理"])
 

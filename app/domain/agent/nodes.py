@@ -12,6 +12,7 @@ scheduler_node 抽离到 scheduler_node.py（仅 SCHEDULE 模式触发）。
 import asyncio
 from datetime import datetime
 
+from app.domain.agent.builtin_tools import get_builtin_tools
 from app.domain.agent.executor import (
     apply_context_trim,
     execute_tool_call,
@@ -19,8 +20,9 @@ from app.domain.agent.executor import (
     truncate_tool_output,
 )
 from app.domain.agent.intent import classify_intent
-from app.domain.agent.prompts import SYSTEM_PROMPT
+from app.domain.agent.prompts import SYSTEM_PROMPT, build_system_prompt
 from app.domain.agent.state import AgentMode, AgentState, AgentStatus, StepRecord
+from app.domain.agent.termination import should_terminate
 from app.utils.config import settings
 from app.utils.logger import get_logger
 from app.utils.response import ErrorCode
@@ -36,8 +38,9 @@ async def intent_node(state: AgentState) -> dict:
     from app.infra.llm.provider import get_llm
     from app.service.skill_service import skill_service
 
-    # 预加载可用工具（后续 executor 也会用到）
+    # 预加载可用工具（后续 executor 也会用到）+ 内置工具（finish/delegate）
     tools = await skill_service.list_tools_for_llm(permission="user")
+    tools = tools + get_builtin_tools()  # Phase 1: 注入内置工具
     state.available_tools = tools
 
     llm = get_llm()
@@ -120,6 +123,10 @@ async def executor_node(state: AgentState) -> dict:
     from app.domain.agent.context_window import get_context_window_tokens
     apply_context_trim(state, get_context_window_tokens(settings.llm_model), "execute")
 
+    # Phase 1: 刷新 system prompt（L2 资源预算可见，促使 LLM 接近上限时主动 finish）
+    if state.messages and state.messages[0].get("role") == "system":
+        state.messages[0]["content"] = build_system_prompt(state)
+
     from app.domain.agent.guardrail import sanitize_messages, sanitize_output
     safe_messages = sanitize_messages(state.messages)
 
@@ -158,8 +165,10 @@ async def executor_node(state: AgentState) -> dict:
         {"id": tc.id, "type": "function", "function": {"name": tc.function.name,
          "arguments": tc.function.arguments}} for tc in tool_calls]})
 
-    # 并行执行所有工具调用（return_exceptions=True 防止单个工具异常拖垮整体）
-    tasks = [execute_tool_call(state, tc) for tc in tool_calls]
+    # 并行执行所有工具调用（Phase 1: 经 healer 自愈，return_exceptions=True 防止单个异常拖垮整体）
+    from app.domain.agent.healer import get_healer
+    healer = get_healer()
+    tasks = [healer.execute_with_healing(state, tc, execute_tool_call) for tc in tool_calls]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     step_records: list[StepRecord] = []
     for r in results:
@@ -174,6 +183,23 @@ async def executor_node(state: AgentState) -> dict:
     for step in step_records:
         step.token_usage = usage or None
         step.llm_duration_ms = llm_duration_ms
+
+    # Phase 1: finish 工具早返回（L1 终止条件 — LLM 显式标记完成）
+    finish_step = next((s for s in step_records if s.tool_name == "finish"), None)
+    if finish_step:
+        summary = (finish_step.tool_output or {}).get("summary", "") or state.final_answer
+        state.add_event("step_completed", {"step": f"execute_{state.current_step}", "result": "finish"})
+        return {
+            "status": AgentStatus.COMPLETED,
+            "final_answer": summary,
+            "result": {"answer": summary, "usage": usage},
+            "messages": state.messages + [{"role": "assistant", "content": content or "", "tool_calls": [
+                {"id": tc.id, "type": "function", "function": {"name": tc.function.name,
+                 "arguments": tc.function.arguments}} for tc in tool_calls
+            ]}],
+            "steps": state.steps + list(step_records),
+            "total_tokens": state.total_tokens,
+        }
 
     # 回填工具结果给 LLM（保持 tool_call_id 关联，智能截断保护 JSON 结构）
     for step, tc in zip(step_records, tool_calls):
@@ -231,11 +257,12 @@ async def reflector_node(state: AgentState) -> dict:
     if state.status == AgentStatus.WAITING_CONFIRM:
         return {}
 
-    # stuck 检测：连续 3 次调用同一工具且失败 → 放弃
-    if _is_stuck(state):
-        log.warning("Agent stuck detected, giving up")
-        state.add_event("stuck_detected", {"step": state.current_step})
-        return {"status": AgentStatus.FAILED, "error": {"code": "AGENT_STUCK", "message": "连续工具调用失败，放弃执行"}}
+    # Phase 1: L3 行为终止检测（doom loop / stuck on failure）→ FAILED
+    should_stop, reason = should_terminate(state)
+    if should_stop:
+        log.warning("Agent termination detected: {}", reason)
+        state.add_event("stuck_detected", {"step": state.current_step, "reason": reason})
+        return {"status": AgentStatus.FAILED, "error": {"code": "AGENT_STUCK", "message": f"终止: {reason}"}}
 
     # 触发 LLM 反思判断（避免每步都调用，控制成本）
     from app.domain.agent.reflector import should_reflect, reflect, apply_reflect_decision
@@ -254,13 +281,3 @@ async def reflector_node(state: AgentState) -> dict:
         return {"status": AgentStatus.EXECUTING, "current_step": state.current_step}
 
     return {"status": AgentStatus.COMPLETED if state.final_answer else AgentStatus.REFLECTING}
-
-
-def _is_stuck(state: AgentState) -> bool:
-    """检测是否卡住：连续 3 次失败调用同一工具"""
-    recent = state.steps[-3:] if len(state.steps) >= 3 else []
-    if len(recent) < 3:
-        return False
-    tool_names = [s.tool_name for s in recent]
-    statuses = [s.status for s in recent]
-    return len(set(tool_names)) == 1 and all(s == "failed" for s in statuses)

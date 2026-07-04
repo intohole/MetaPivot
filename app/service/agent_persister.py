@@ -9,7 +9,7 @@ from typing import Optional
 from sqlalchemy import func, select, update
 
 from app.domain.agent.state import AgentState, AgentStatus
-from app.infra.db.models_core import AgentTaskORM, AgentTaskStepORM
+from app.infra.db.models_core import AgentTaskEventORM, AgentTaskORM, AgentTaskStepORM
 from app.infra.db.session import get_db_session
 
 
@@ -228,3 +228,31 @@ async def audit_task_event(
     except Exception as e:
         from app.utils.logger import get_logger
         get_logger("agent_persister").warning("audit {} failed: {}", action, e)
+
+
+async def persist_event(
+    task_id: str,
+    event_type: str,
+    event_data: dict,
+    step_index: Optional[int] = None,
+    request_id: str = "",
+) -> None:
+    """持久化 Agent 事件到 agent_task_events 表（Phase 4 会话重放）
+
+    被 AgentService._consume_agent 用 asyncio.create_task 包装为 fire-and-forget 调用，
+    不阻塞主链路。失败仅 WARNING 日志，不影响 Agent 执行。
+    """
+    try:
+        async with get_db_session() as session:
+            session.add(AgentTaskEventORM(
+                task_id=task_id,
+                event_type=event_type,
+                event_data=event_data,
+                step_index=step_index,
+                request_id=request_id or None,
+            ))
+    except Exception as e:
+        from app.utils.logger import get_logger
+        get_logger("agent_persister").warning(
+            "persist_event failed task={} type={}: {}", task_id, event_type, e
+        )

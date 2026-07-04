@@ -95,6 +95,18 @@ class Settings(BaseSettings):
     # HITL
     hitl_timeout_seconds: int = 300
 
+    # Agent 核心深化（Phase 1）
+    agent_task_timeout: int = 300  # 任务级超时（秒），asyncio.wait_for 包裹 runner
+    agent_judge_k: int = 4  # L4 Judge 评估间隔（每 K 步评估一次）
+
+    # OTel + Langfuse 可观测性（Phase 4）
+    otel_enabled: bool = False  # OTel SDK 总开关（False 时使用 NoopTracer，零依赖）
+    otel_endpoint: str = ""  # OTLP exporter endpoint（可选，独立 OTel collector）
+    langfuse_enabled: bool = False  # Langfuse 集成开关
+    langfuse_host: str = ""  # Langfuse host（如 https://cloud.langfuse.com）
+    langfuse_public_key: str = ""  # Langfuse public key
+    langfuse_secret_key: str = ""  # Langfuse secret key
+
     @property
     def postgres_dsn(self) -> str:
         return (

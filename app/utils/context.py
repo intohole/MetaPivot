@@ -79,3 +79,16 @@ def get_context_id() -> str:
     if rid:
         return rid
     return trace_id_var.get() or "-"
+
+
+def attach_otel_context(request_id: str, user_id: str = "") -> Optional[object]:
+    """桥接 contextvars → OTel Baggage（Phase 4）
+
+    在 asyncio.create_task 边界显式 attach（contextvars 不跨 task）。
+    返回 Token 用于 detach；OTel 不可用时返回 None。
+    """
+    try:
+        from app.infra.observability.baggage import attach_user_baggage
+        return attach_user_baggage(user_id=user_id, task_id=request_id)
+    except Exception:
+        return None
