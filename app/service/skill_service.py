@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from app.infra.db.models_user_skill import SkillORM
 from app.infra.db.session import get_db_session
 from app.utils.logger import get_logger
+from app.utils.metrics import record_skill_call
 from app.utils.response import AppError, ErrorCode
 
 log = get_logger("skill_service")
@@ -135,13 +136,15 @@ class SkillService:
 
         duration = int((datetime.now() - started).total_seconds() * 1000)
         await self._incr_call_count(skill_id)
-        # 写审计
+        skill_status = "success" if "error" not in result else "failed"
+        # 写审计 + 指标采集
         from app.service.audit_service import audit_service
         await audit_service.log_action(
             user_id=user_id, action="skill.call", skill_id=skill_id,
             input_data=args, output_data=result, duration_ms=duration,
-            status="success" if "error" not in result else "failed",
+            status=skill_status,
         )
+        record_skill_call(skill.name, skill_status)
         return result
 
     async def test_skill(self, skill_id: str, args: dict) -> dict:

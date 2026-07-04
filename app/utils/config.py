@@ -25,11 +25,14 @@ class Settings(BaseSettings):
     app_port: int = 8000
     app_log_level: str = "INFO"
     app_log_retention_days: int = 3
+    app_log_format: Literal["text", "json"] = "text"  # 生产环境推荐 json（ELK/Loki 采集）
 
     # 部署规模（资源可伸缩）— 小企业可用 sqlite/memory/local，零外部依赖
     db_backend: Literal["sqlite", "postgresql"] = "postgresql"
     cache_backend: Literal["memory", "redis"] = "redis"
     vector_backend: Literal["local", "milvus"] = "local"
+    memory_backend: Literal["memory", "db"] = "db"
+    scheduler_backend: Literal["async", "celery"] = "async"
     sqlite_path: str = "data/metapivot.db"
 
     # LLM

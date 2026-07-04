@@ -9,7 +9,7 @@
 |------|--------|--------|
 | 安全 | JWT认证、RBAC、HITL、审计日志、密钥环境变量化 | 数据脱敏、Guardrail、密钥轮换、等保合规 |
 | 性能 | 全异步架构、async SQLAlchemy、Redis缓存、后台任务 | 连接池调优、SSE卡片渐进、消息合并、限流落地 |
-| 可用性 | /health、/ready探针、loguru日志、docker-compose | 监控告警、Celery队列、回滚机制、灰度发布 |
+| 可用性 | /health、/ready探针、结构化JSON日志、Prometheus指标、/metrics端点、docker-compose | Grafana看板、Alertmanager告警、Celery队列、回滚机制、灰度发布 |
 
 ---
 
@@ -106,14 +106,20 @@
 ## 三、可用性升级（P1）
 
 ### 3.1 监控与告警
-- **当前**：仅 loguru 日志，无 metrics
+- **当前**：已落地结构化 JSON 日志（`APP_LOG_FORMAT=json`，ELK/Loki 友好）+ Prometheus 指标体系
+  - `/metrics` 端点暴露 Prometheus 文本格式（`prometheus_client==0.21.1`）
+  - 5 组业务指标：HTTP 请求计数/延迟、Agent 任务计数/延迟/活跃数/Token 用量、LLM 调用计数/延迟、Skill 调用计数、Workflow 执行计数
+  - HTTP 中间件自动采集 `method/path/status` 维度，路径归一化（动态 ID → `{id}`）避免高基数
+  - 节点级事件（step_started/llm_call/stuck_detected 等）drain 到 SSE，链路可见
+  - AgentTaskORM 增加 `finished_at`/`duration_ms` 字段，任务详情接口返回
 - **目标**：
-  - Prometheus metrics 暴露 `/metrics` 端点
-  - 关键指标：QPS、LLM 调用耗时 P99、Agent 任务成功率、IM 消息处理延迟
-  - Grafana 看板 + Alertmanager 告警（钉钉/企微机器人通知）
-- **实施**：`pip install prometheus-fastapi-instrumentator` + 自定义业务 metrics
-- **优先级**：P1
-- **工作量**：2 天
+  - Grafana 看板（基于现有 5 组指标）+ Alertmanager 告警（钉钉/企微机器人通知）
+  - 关键告警规则：LLM P99 > 10s、Agent 失败率 > 5%、活跃任务数 > 50
+- **实施**：
+  - 已完成：`app/utils/metrics.py`（指标定义）+ `app/middleware/metrics_middleware.py`（HTTP 采集）+ 各 Service finally 块注入业务指标
+  - 待补：Grafana 看板 JSON（`docs/grafana/metapivot-dashboard.json`）+ Alertmanager rule 文件
+- **优先级**：P2（监控已落地，仅需配置看板与告警规则）
+- **工作量**：0.5 天（看板 + 告警规则）
 
 ### 3.2 Celery 任务队列落地
 - **当前**：`docker-compose.yml` 已定义 worker 服务，但 `app/infra/queue/celery_app.py` 未实现
@@ -200,7 +206,7 @@ Week 1 (P0 安全):
 Week 2 (P1 性能+可用性):
   ├─ 2.1 连接池调优
   ├─ 2.2 IM 响应时延优化（思考中卡片）
-  ├─ 3.1 Prometheus 监控告警
+  ├─ 3.1 Grafana 看板 + Alertmanager 告警（指标已落地，仅需配置）
   └─ 3.2 Celery 任务队列落地
 
 Week 3 (P1 功能补强):
@@ -260,5 +266,5 @@ curl http://localhost:8000/api/v1/skills -H "Authorization: Bearer <token>"
 |------|----------|
 | 安全 | Guardrail 覆盖 100% LLM 调用 + 密钥 90 天轮换 + 审计日志独立存储 |
 | 性能 | IM 3 秒内首响应 + DB 连接池配置合理 + 限流中间件生效 |
-| 可用性 | Prometheus 指标暴露 + 关键告警接入 IM + Celery 任务可靠执行 |
+| 可用性 | Prometheus 指标已暴露（HTTP/Agent/LLM/Skill/Workflow 5 组）+ 结构化 JSON 日志 ELK 友好 + 关键告警接入 IM + Celery 任务可靠执行 |
 | 代码质量 | 文件 ≤300 行 + 分层依赖向下 + 异步非阻塞 + Domain DI 净化 |

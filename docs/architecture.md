@@ -298,7 +298,8 @@ class PermissionChecker:
 | 缓存 | Redis | 会话/限流/PubSub |
 | 向量库 | Milvus | RAG知识库 |
 | 任务队列 | Celery + Redis | 异步任务，禁止阻塞主线程 |
-| 日志 | loguru | 文件轮转，保留3天 |
+| 日志 | loguru | 文件轮转保留3天，`APP_LOG_FORMAT=json` 输出 ELK/Loki 友好结构化日志 |
+| 指标 | prometheus_client | `/metrics` 端点暴露 HTTP/Agent/LLM/Skill/Workflow 5 组业务指标 |
 | 部署 | Docker Compose | 私有化一键部署 |
 
 ## 十一、关键技术风险与缓解
@@ -310,3 +311,56 @@ class PermissionChecker:
 | Agent循环 | max_steps=10 + 工具去重 + Reflector评估 + 超时熔断 |
 | 三端API频次限制 | Redis令牌桶 + 消息合并 + 高频去重 + 钉钉扩容建议 |
 | 私有化安全 | 全内网无外联 + 权重双哈希校验 + 审计≥6月 + 等保2.0三级 |
+
+## 十二、监控与可观测性
+
+### 三层可观测体系
+
+```
+┌─────────────────────────────────────────────┐
+│ Metrics（指标）— Prometheus /metrics         │  ← 系统健康度，告警依据
+│   HTTP/Agent/LLM/Skill/Workflow 5 组指标      │
+├─────────────────────────────────────────────┤
+│ Logs（日志）— loguru JSON sink                │  ← 故障排查，根因定位
+│   request_id/trace_id/user_id 跨任务传播     │
+├─────────────────────────────────────────────┤
+│ Traces（追踪）— SSE 节点级事件流               │  ← 链路可见，实时调试
+│   step_started/llm_call/stuck_detected 等     │
+└─────────────────────────────────────────────┘
+```
+
+### 指标注入点
+
+| 注入位置 | 文件 | 采集内容 |
+|---------|------|---------|
+| HTTP 中间件 | `app/middleware/metrics_middleware.py` | method/path/status/duration（路径归一化） |
+| Agent 任务 | `app/service/agent_service.py`（_run_task finally + cancel_task） | 任务总数、活跃数、耗时、Token |
+| LLM 调用 | `app/domain/agent/executor.py`（record_llm_metrics helper） | model/status/duration、Token prompt/completion |
+| Skill 调用 | `app/service/skill_service.py` | skill_name/status |
+| 工作流执行 | `app/service/workflow_service.py` | status |
+
+### Agent 状态机可见性
+
+节点通过 `state.add_event()` 累积事件，`graph._drain_events()` 在每个节点执行后 drain 到 SSE，保证节点级事件到达订阅者（原本只到 `state.events` 内部）：
+
+```
+intent_node → step_started{step:intent} / llm_call{usage} / step_completed
+planner_node → step_started{step:planning} / step_completed
+executor_node → step_started / llm_call{duration,usage} / tool_call / human_confirm_required / stuck_detected / step_completed
+reflector_node → reflected{status}
+replier_node → final_result{answer,usage}
+```
+
+### FAILED 状态快速结束
+
+`graph.run_agent` 在 executor/reflector 返回 `FAILED` 时直接 yield `final_result` 并 return，跳过 `_stream_final_reply` 和 `replier_node`（避免 tenacity 重试拖慢 finally 块的 `record_agent_task` 执行，使任务指标能及时出现在 `/metrics`）。
+
+### 任务时序字段
+
+`AgentTaskORM` 增加 `finished_at` / `duration_ms` 字段：
+- `created_at` — 任务创建（`create_task` 时设置）
+- `updated_at` — 状态变更（每次 `update_task_status` 时更新）
+- `finished_at` — 接近终态（`update_task_status` 在 try/except 块设置）
+- `duration_ms` — ORM `__init__` 计算的 `finished_at - created_at` 毫秒数
+
+判断任务是否真正结束应查 `finished_at` 非空（`status` 字段可能在循环中途被 `persist_state` 设为 `failed` 但任务还在执行）。

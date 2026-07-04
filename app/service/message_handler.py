@@ -7,8 +7,10 @@
 4. HITL 时发送确认卡片到 IM
 """
 import asyncio
+import uuid
 
 from app.domain.channel.models import UnifiedMessage
+from app.utils.context import set_request_context
 from app.utils.logger import get_logger
 
 log = get_logger("message_handler")
@@ -23,6 +25,11 @@ async def handle_im_message(msg: UnifiedMessage) -> None:
         await _handle_command(msg)
         return
 
+    # IM 消息无 HTTP 请求上下文，生成合成 request_id 用于链路追踪
+    # asyncio.create_task 会自动继承此 contextvars，后台任务日志可关联
+    synthetic_rid = f"im-{msg.channel.value}-{uuid.uuid4().hex[:8]}"
+    set_request_context(synthetic_rid, user_id=msg.sender.user_id)
+
     # 启动 Agent 任务
     from app.service.agent_service import agent_service
     try:
@@ -36,7 +43,21 @@ async def handle_im_message(msg: UnifiedMessage) -> None:
         )
         task_id = result["task_id"]
         log.info("Agent task started for msg {}: {}", msg.msg_id, task_id)
-        # 后台订阅事件流并回传 IM
+        # 审计 IM 消息接收（非阻塞）
+        from app.service.audit_service import audit_service
+        from app.utils.context import get_request_id
+        try:
+            await audit_service.log_action(
+                user_id=msg.sender.user_id, action="im.message",
+                task_id=task_id, input_data={
+                    "channel": msg.channel.value, "chat_id": msg.chat_id,
+                    "sender": msg.sender.user_id, "text_preview": msg.text[:100],
+                },
+                status="success", request_id=get_request_id(),
+            )
+        except Exception as audit_e:
+            log.warning("audit im message failed: {}", audit_e)
+        # 后台订阅事件流并回传 IM（继承当前 contextvars，日志带 request_id）
         asyncio.create_task(_stream_back_to_im(task_id, msg))
     except Exception as e:
         log.exception("Handle IM message failed: {}", e)

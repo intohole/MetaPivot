@@ -15,6 +15,7 @@ from app.domain.workflow.engine import WorkflowDefinition, execute_node
 from app.infra.db.models_core import WorkflowExecutionORM, WorkflowORM
 from app.infra.db.session import get_db_session
 from app.utils.logger import get_logger
+from app.utils.metrics import record_workflow_execution
 from app.utils.response import AppError, ErrorCode
 
 log = get_logger("workflow_service")
@@ -183,6 +184,8 @@ class WorkflowService:
         context_mod: Optional[dict] = None,
     ) -> None:
         """异步推进工作流执行"""
+        final_status = "failed"
+        outputs: dict = {}
         try:
             wf_def = WorkflowDefinition(definition)
             context = {
@@ -203,22 +206,21 @@ class WorkflowService:
                 if output.get("paused"):
                     await self._update_execution(execution_id, status="paused")
                     log.info("Workflow {} paused at {} for HITL", execution_id, current)
+                    final_status = "paused"
                     return
 
                 if output.get("finished"):
-                    await self._update_execution(
-                        execution_id, status="completed",
-                        outputs=context.get("outputs", {}),
-                    )
+                    outputs = context.get("outputs", {})
+                    await self._update_execution(execution_id, status="completed", outputs=outputs)
                     log.info("Workflow {} completed", execution_id)
+                    final_status = "completed"
                     return
 
                 # 推进到下一节点
                 if not next_ids:
-                    await self._update_execution(
-                        execution_id, status="completed",
-                        outputs=context.get("outputs", {}),
-                    )
+                    outputs = context.get("outputs", {})
+                    await self._update_execution(execution_id, status="completed", outputs=outputs)
+                    final_status = "completed"
                     return
                 current = next_ids[0]  # 简化：取第一个分支
 
@@ -228,6 +230,21 @@ class WorkflowService:
         except Exception as e:
             log.exception("Workflow {} crashed: {}", execution_id, e)
             await self._update_execution(execution_id, status="failed", error={"message": str(e)})
+        finally:
+            # 审计工作流执行结果 + 指标采集（非阻塞，paused 不审计终态）
+            if final_status in ("completed", "failed"):
+                record_workflow_execution(final_status)
+                from app.service.audit_service import audit_service
+                from app.utils.context import get_request_id
+                try:
+                    await audit_service.log_action(
+                        user_id=user_id, action="workflow.execute",
+                        workflow_id=execution_id, input_data=inputs,
+                        output_data=outputs, status=final_status,
+                        request_id=get_request_id(),
+                    )
+                except Exception as audit_e:
+                    log.warning("audit workflow {} failed: {}", execution_id, audit_e)
 
     async def _update_execution(
         self,

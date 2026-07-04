@@ -2,6 +2,7 @@
 
 状态机：INTENT → PLANNING → EXECUTING → HITL(可选) → REFLECTING → REPLY
 """
+from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
 
@@ -26,6 +27,7 @@ class AgentMode(str, Enum):
     PIPELINE = "pipeline"      # 简单问答，直接 LLM 回答
     AGENT = "agent"            # 需要工具调用的多步 Agent
     WORKFLOW = "workflow"      # 路由到指定工作流
+    SCHEDULE = "schedule"      # 解析出定时任务，创建调度
     FALLBACK = "fallback"      # 兜底降级
 
 
@@ -38,8 +40,14 @@ class StepRecord(BaseModel):
     tool_output: Optional[dict] = None
     require_confirm: bool = False
     confirm_decision: Optional[str] = None
+    confirm_user: Optional[str] = None
     status: str = "pending"
     duration_ms: Optional[int] = None
+    # 链路可见性：拆分 LLM vs 工具耗时（性能瓶颈定位）
+    llm_duration_ms: Optional[int] = None
+    tool_duration_ms: Optional[int] = None
+    # Token 用量持久化（prompt/completion/total_tokens，来自 LLM usage）
+    token_usage: Optional[dict] = None
     error: Optional[str] = None
 
 
@@ -85,6 +93,11 @@ class AgentState(BaseModel):
     final_answer: str = ""
     result: dict = Field(default_factory=dict)
     error: Optional[dict] = None
+
+    # 链路可见性：Token 用量累计（LLM 成本追踪，落 AgentTaskORM.total_tokens）
+    total_tokens: int = 0
+    # 任务起始时间（计算 duration_ms，落 AgentTaskORM.started_at/finished_at/duration_ms）
+    started_at: Optional[datetime] = None
 
     # 流式事件队列（仅运行时使用，不持久化）
     events: list[dict] = Field(default_factory=list, description="待推送的 SSE 事件")

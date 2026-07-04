@@ -1,28 +1,26 @@
 """Agent 节点实现 - 自定义状态机各节点函数
 
-节点列表：
-- intent_node: LLM 意图分类 → mode (pipeline/agent/workflow)
-- planner_node: 构造对话上下文
-- executor_node: 并行执行工具调用（asyncio.gather）
-- hitl_node: 检查 require_confirm，需要则触发暂停
-- reflector_node: 评估是否继续循环（含 stuck 检测）
-- replier_node: 生成最终回复（支持流式）
-
+节点：intent_node → planner_node → executor_node → hitl_node → reflector_node → replier_node
 每个节点签名：async def node(state: AgentState) -> dict（返回部分状态更新）
 
-架构说明：
-  本模块位于 Domain 层，但 executor_node / _execute_tool_call 通过函数内
-  延迟导入 app.service.skill_service 调用 Service 层（运行时回调）。
-  这是一种工程妥协：避免循环依赖的同时让节点能执行 IO（工具调用）。
+架构：Domain 层节点通过函数内延迟 import Service 层执行 IO，避免循环依赖。
+executor 辅助函数（execute_tool_call / truncate_tool_output / apply_context_trim）
+抽离到 executor.py，planner/reflector 逻辑抽离到 planner.py / reflector.py，
+scheduler_node 抽离到 scheduler_node.py（仅 SCHEDULE 模式触发）。
 """
 import asyncio
-import json
 from datetime import datetime
-from typing import Any
 
+from app.domain.agent.executor import (
+    apply_context_trim,
+    execute_tool_call,
+    record_llm_metrics,
+    truncate_tool_output,
+)
 from app.domain.agent.intent import classify_intent
 from app.domain.agent.prompts import REPLY_PROMPT, SYSTEM_PROMPT
 from app.domain.agent.state import AgentMode, AgentState, AgentStatus, StepRecord
+from app.utils.config import settings
 from app.utils.logger import get_logger
 from app.utils.response import ErrorCode
 
@@ -42,40 +40,70 @@ async def intent_node(state: AgentState) -> dict:
     state.available_tools = tools
 
     llm = get_llm()
-    mode, intent = await classify_intent(state.original_message, tools, llm_provider=llm)
+    mode, intent, schedule_result = await classify_intent(
+        state.original_message, tools, llm_provider=llm,
+    )
+
+    # 检测到定时任务 → 暂存到 context，planner_node 会路由到 scheduler_node
+    if schedule_result is not None:
+        state.context["schedule_result"] = schedule_result.to_dict()
 
     state.add_event("step_completed", {"step": "intent", "result": {"mode": mode.value, "intent": intent}})
-    return {"mode": mode, "intent": intent, "status": AgentStatus.PLANNING, "available_tools": tools}
+    return {
+        "mode": mode, "intent": intent,
+        "status": AgentStatus.PLANNING,
+        "available_tools": tools,
+        "context": state.context,
+    }
 
 
 # ============ 规划 ============
 
 async def planner_node(state: AgentState) -> dict:
-    """规划节点：构造对话上下文
+    """规划节点：按 mode 路由
 
-    简化实现：直接进入 executor，由 LLM tool_choice=auto 决定调用哪个工具。
-    完整版可用 Plan-Execute 模板先生成步骤列表（后续优化项）。
+    - SCHEDULE 模式：跳过 plan，直接进入 scheduler_node（COMPLETED）
+    - PIPELINE 模式：跳过规划，直接进入回复
+    - AGENT 模式：调用 LLM 生成多步计划，注入 system prompt 作为上下文
+    - 计划失败不阻塞（plan 为空时 executor 仍可 tool_choice="auto"）
     """
     state.add_event("step_started", {"step": "planning"})
+    if state.mode == AgentMode.SCHEDULE:
+        # 定时任务模式：路由到 scheduler_node
+        state.add_event("step_completed", {"step": "planning", "result": {"route": "scheduler"}})
+        return {"status": AgentStatus.COMPLETED}  # scheduler_node 在 graph 层单独处理
     if state.mode == AgentMode.PIPELINE:
         # 简单问答直接进入回复
         state.add_event("step_completed", {"step": "planning", "result": {"skip_to": "reply"}})
         return {"status": AgentStatus.REFLECTING}
 
-    # AGENT 模式：构造对话上下文
+    # AGENT 模式：生成执行计划（Plan-Execute）
+    from app.infra.llm.provider import get_llm
+    from app.domain.agent.planner import generate_plan, format_plan_as_context
+
+    plan: list[dict] = []
+    try:
+        llm = get_llm()
+        plan = await generate_plan(state, llm)
+    except Exception as e:
+        log.warning("generate_plan failed, fallback to no plan: {}", e)
+
+    # 构造对话上下文：system + plan_context + user
+    plan_ctx = format_plan_as_context(plan)
+    system_content = SYSTEM_PROMPT + plan_ctx
     if not state.messages:
         state.messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": state.original_message},
         ]
-    state.add_event("step_completed", {"step": "planning"})
-    return {"status": AgentStatus.EXECUTING, "messages": state.messages}
+    state.add_event("step_completed", {"step": "planning", "result": {"plan_steps": len(plan)}})
+    return {"status": AgentStatus.EXECUTING, "messages": state.messages, "plan": plan}
 
 
 # ============ 执行（并行工具调用）============
 
 async def executor_node(state: AgentState) -> dict:
-    """执行节点：调用 LLM 并并行执行 tool_calls"""
+    """执行节点：调用 LLM 并并行执行 tool_calls（含 Token 用量追踪 + 上下文裁剪）"""
     from app.infra.llm.provider import get_llm
 
     state.add_event("step_started", {"step": f"execute_{state.current_step}"})
@@ -88,7 +116,9 @@ async def executor_node(state: AgentState) -> dict:
     llm = get_llm()
     tools = state.available_tools
 
-    # Guardrail 输入脱敏
+    from app.domain.agent.context_window import get_context_window_tokens
+    apply_context_trim(state, get_context_window_tokens(settings.llm_model), "execute")
+
     from app.domain.agent.guardrail import sanitize_messages, sanitize_output
     safe_messages = sanitize_messages(state.messages)
 
@@ -101,6 +131,7 @@ async def executor_node(state: AgentState) -> dict:
     except Exception as e:
         log.exception("LLM call failed: {}", e)
         state.add_event("error", {"message": str(e)})
+        record_llm_metrics({}, 0, "failed")
         return {"status": AgentStatus.FAILED, "error": {"code": "LLM_ERROR", "message": str(e)}}
 
     content = result.get("content")
@@ -108,32 +139,47 @@ async def executor_node(state: AgentState) -> dict:
         content = sanitize_output(content)
     tool_calls = result.get("tool_calls") or []
     llm_duration_ms = int((datetime.now() - started).total_seconds() * 1000)
-    state.add_event("llm_call", {"duration_ms": llm_duration_ms, "usage": result.get("usage")})
+    # Token 用量追踪：累计到 state.total_tokens，落 AgentTaskORM.total_tokens
+    usage = result.get("usage") or {}
+    state.total_tokens += int(usage.get("total_tokens", 0))
+    state.add_event("llm_call", {"duration_ms": llm_duration_ms, "usage": usage})
+    record_llm_metrics(usage, llm_duration_ms)
 
     # 无工具调用 → 进入回复阶段
     if not tool_calls:
         if content:
             return {"status": AgentStatus.COMPLETED, "final_answer": content,
-                    "result": {"answer": content, "usage": result.get("usage")}}
-        return {"status": AgentStatus.REFLECTING}
+                    "result": {"answer": content, "usage": usage},
+                    "total_tokens": state.total_tokens}
+        return {"status": AgentStatus.REFLECTING, "total_tokens": state.total_tokens}
 
-    # 记录 assistant 消息（含 tool_calls）
     state.messages.append({"role": "assistant", "content": content, "tool_calls": [
-        {"id": tc.id, "type": "function", "function": {
-            "name": tc.function.name, "arguments": tc.function.arguments,
-        }} for tc in tool_calls
-    ]})
+        {"id": tc.id, "type": "function", "function": {"name": tc.function.name,
+         "arguments": tc.function.arguments}} for tc in tool_calls]})
 
-    # 并行执行所有工具调用（asyncio.gather）
-    tasks = [_execute_tool_call(state, tc) for tc in tool_calls]
-    step_records = await asyncio.gather(*tasks, return_exceptions=False)
+    # 并行执行所有工具调用（return_exceptions=True 防止单个工具异常拖垮整体）
+    tasks = [execute_tool_call(state, tc) for tc in tool_calls]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    step_records: list[StepRecord] = []
+    for r in results:
+        if isinstance(r, Exception):
+            step_records.append(StepRecord(  # 构造失败 StepRecord（参考 LangGraph ToolNode）
+                step_index=state.current_step, step_name="call_failed", tool_name="unknown",
+                status="failed", error=str(r), tool_output={"error": str(r)}, duration_ms=0))
+        else:
+            step_records.append(r)
 
-    # 回填工具结果给 LLM（保持 tool_call_id 关联）
+    # 附加 LLM 调用元数据到步骤（token 用量 + LLM 耗时，便于成本/性能分析）
+    for step in step_records:
+        step.token_usage = usage or None
+        step.llm_duration_ms = llm_duration_ms
+
+    # 回填工具结果给 LLM（保持 tool_call_id 关联，智能截断保护 JSON 结构）
     for step, tc in zip(step_records, tool_calls):
         state.messages.append({
             "role": "tool", "tool_call_id": tc.id,
             "name": tc.function.name,
-            "content": json.dumps(step.tool_output, ensure_ascii=False)[:2000],
+            "content": truncate_tool_output(step.tool_output),
         })
 
     # 检查 HITL：若有步骤需要确认且未确认，暂停
@@ -146,6 +192,7 @@ async def executor_node(state: AgentState) -> dict:
                 "status": AgentStatus.WAITING_CONFIRM,
                 "pending_confirm": {"step": step.step_index, "tool": step.tool_name, "input": step.tool_input},
                 "steps": state.steps + list(step_records),
+                "total_tokens": state.total_tokens,
             }
 
     state.add_event("step_completed", {"step": f"execute_{state.current_step}"})
@@ -154,52 +201,8 @@ async def executor_node(state: AgentState) -> dict:
         "messages": state.messages,
         "current_step": state.current_step + 1,
         "steps": state.steps + list(step_records),
+        "total_tokens": state.total_tokens,
     }
-
-
-async def _execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
-    """执行单个工具调用（可并行，无状态副作用）"""
-    from app.service.skill_service import skill_service
-    started = datetime.now()
-    tool_name = tc.function.name
-    try:
-        args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-    except json.JSONDecodeError:
-        args = {}
-
-    step = StepRecord(
-        step_index=state.current_step, step_name=f"call_{tool_name}",
-        tool_name=tool_name, tool_input=args, status="running",
-    )
-
-    skill_id = await skill_service.find_skill_id_by_name(tool_name)
-    if skill_id is None:
-        step.status = "failed"
-        step.error = f"Skill '{tool_name}' 不存在或未启用"
-        step.tool_output = {"error": step.error}
-        step.duration_ms = int((datetime.now() - started).total_seconds() * 1000)
-        return step
-
-    skill = await skill_service.get_skill(skill_id)
-    step.require_confirm = skill.require_confirm if skill else False
-
-    # HITL 检查：需要确认则不执行，等待用户确认
-    if step.require_confirm:
-        step.status = "waiting_confirm"
-        step.duration_ms = int((datetime.now() - started).total_seconds() * 1000)
-        return step
-
-    # 实际执行
-    try:
-        result = await skill_service.execute(skill_id, args, user_id=state.user_id)
-        step.tool_output = result
-        step.status = "failed" if "error" in result else "success"
-    except Exception as e:
-        step.tool_output = {"error": str(e)}
-        step.status = "failed"
-        step.error = str(e)
-    step.duration_ms = int((datetime.now() - started).total_seconds() * 1000)
-    return step
 
 
 # ============ HITL / 反思 / 回复 ============
@@ -216,7 +219,12 @@ async def hitl_node(state: AgentState) -> dict:
 
 
 async def reflector_node(state: AgentState) -> dict:
-    """反思节点：评估是否继续循环（含 stuck 检测）"""
+    """反思节点：评估是否继续循环（targeted reflection）
+
+    1. stuck 检测（连续 3 次失败同工具）→ FAILED
+    2. 触发条件满足时调用 LLM 反思（失败/接近上限/疑似循环）
+    3. 快速路径：tool 结果存在 → 继续 EXECUTING；否则 COMPLETED
+    """
     if state.status == AgentStatus.COMPLETED:
         return {}
     if state.status == AgentStatus.WAITING_CONFIRM:
@@ -228,7 +236,19 @@ async def reflector_node(state: AgentState) -> dict:
         state.add_event("stuck_detected", {"step": state.current_step})
         return {"status": AgentStatus.FAILED, "error": {"code": "AGENT_STUCK", "message": "连续工具调用失败，放弃执行"}}
 
-    # 最后消息是 tool 结果 → 继续执行（让 LLM 综合结果）
+    # 触发 LLM 反思判断（避免每步都调用，控制成本）
+    from app.domain.agent.reflector import should_reflect, reflect, apply_reflect_decision
+    if should_reflect(state):
+        try:
+            from app.infra.llm.provider import get_llm
+            llm = get_llm()
+            decision, reason = await reflect(state, llm)
+            apply_reflect_decision(state, decision, reason)
+            return {"status": state.status, "error": state.error}
+        except Exception as e:
+            log.warning("LLM reflect crashed, fallback to default path: {}", e)
+
+    # 快速路径：最后消息是 tool 结果 → 继续执行（让 LLM 综合结果）
     if state.messages and state.messages[-1].get("role") == "tool":
         return {"status": AgentStatus.EXECUTING, "current_step": state.current_step}
 
@@ -242,7 +262,6 @@ def _is_stuck(state: AgentState) -> bool:
         return False
     tool_names = [s.tool_name for s in recent]
     statuses = [s.status for s in recent]
-    # 同一工具且全部失败
     return len(set(tool_names)) == 1 and all(s == "failed" for s in statuses)
 
 
@@ -256,23 +275,26 @@ async def replier_node(state: AgentState) -> dict:
     llm = get_llm()
 
     if state.mode == AgentMode.PIPELINE or not state.available_tools:
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": state.original_message},
-        ]
-        result = await llm.chat_completion(messages=messages)
-        answer = result.get("content", "")
-        state.add_event("final_result", {"answer": answer})
-        return {"status": AgentStatus.COMPLETED, "final_answer": answer,
-                "result": {"answer": answer, "usage": result.get("usage")}}
-
-    # agent 模式：综合工具结果生成最终回复
-    if state.messages:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT},
+                     {"role": "user", "content": state.original_message}]
+    elif state.messages:
+        from app.domain.agent.context_window import get_context_window_tokens
+        apply_context_trim(state, get_context_window_tokens(settings.llm_model), "reply")
         state.messages.append({"role": "user", "content": REPLY_PROMPT})
-        result = await llm.chat_completion(messages=state.messages)
-        answer = result.get("content", "")
-        state.add_event("final_result", {"answer": answer})
-        return {"status": AgentStatus.COMPLETED, "final_answer": answer,
-                "result": {"answer": answer, "usage": result.get("usage")}}
+        messages = state.messages
+    else:
+        return {"status": AgentStatus.COMPLETED, "final_answer": "无法处理您的请求"}
 
-    return {"status": AgentStatus.COMPLETED, "final_answer": "无法处理您的请求"}
+    try:
+        result = await llm.chat_completion(messages=messages)
+    except Exception as e:
+        log.exception("Replier LLM call failed: {}", e)
+        state.add_event("error", {"message": str(e)})
+        record_llm_metrics({}, 0, "failed")
+        return {"status": AgentStatus.FAILED, "error": {"code": "LLM_ERROR", "message": str(e)}}
+    answer, usage = result.get("content", ""), result.get("usage") or {}
+    state.total_tokens += int(usage.get("total_tokens", 0))
+    state.add_event("final_result", {"answer": answer, "usage": usage})
+    record_llm_metrics(usage, 0)
+    return {"status": AgentStatus.COMPLETED, "final_answer": answer,
+            "result": {"answer": answer, "usage": usage}, "total_tokens": state.total_tokens}

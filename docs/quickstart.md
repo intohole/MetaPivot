@@ -214,13 +214,84 @@ curl -X POST http://localhost:8000/api/v1/skills \
 | IM消息无响应 | 检查`/health`端点；查看日志`docker-compose logs api` |
 | Agent超时 | 调整`LLM_TIMEOUT`和`MAX_STEPS`配置 |
 | 钉钉频次超限 | 购买钉钉专业版或企业开发增购包 |
-| LLM调用失败 | 检查API Key；切换备用模型`LLM_PROVIDER` |
+| LLM调用失败 | 检查API Key；切换备用模型`LLM_PROVIDER`；查看`/metrics`中`metapivot_llm_calls_total{status="failed"}` |
 | 知识库检索慢 | 检查Milvus状态；调整`EMBEDDING_BATCH_SIZE` |
+| 任务指标不出现 | 等任务到终态（`finished_at`非空）再查`/metrics`；FAILED 任务也会采集 |
+| JSON 日志解析失败 | 确认 `APP_LOG_FORMAT=json`；每行独立 JSON，使用 `jq .` 解析 |
 
-## 七、下一步
+## 七、监控与可观测性
+
+### Prometheus 指标端点
+
+服务自动暴露 `/metrics` 端点，提供 5 组业务指标（HTTP/Agent/LLM/Skill/Workflow），可直接配置 Prometheus 抓取：
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: metapivot
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['metapivot-host:8000']
+```
+
+**关键指标速查**：
+- `metapivot_http_requests_total` — HTTP 请求计数（method/path/status）
+- `metapivot_agent_tasks_total{status="completed|failed|cancelled"}` — Agent 任务成功率
+- `metapivot_agent_active_tasks` — 当前活跃任务数（Gauge）
+- `metapivot_llm_calls_total` — LLM 调用计数（model/status）
+- `metapivot_agent_token_usage_total{type="prompt|completion|total"}` — Token 用量
+
+**路径归一化**：动态 ID 路径自动归一化为 `{id}`（如 `/api/v1/agent/tasks/abc-123` → `/api/v1/agent/tasks/{id}`），避免 Prometheus 标签高基数。
+
+### 结构化 JSON 日志
+
+生产环境推荐 `APP_LOG_FORMAT=json` 输出单行 JSON（ELK/Loki 友好）：
+
+```bash
+# .env
+APP_LOG_FORMAT=json         # text（开发）/ json（生产）
+APP_LOG_LEVEL=INFO
+APP_LOG_RETENTION_DAYS=3    # 文件轮转保留天数
+```
+
+每条日志字段：`ts` / `level` / `logger` / `module` / `function` / `line` / `message` / `extra`（含 `request_id`/`trace_id`/`user_id`）/ `exception`。
+
+**日志采集**（Loki Promtail 示例）：
+```yaml
+scrape_configs:
+  - job_name: metapivot
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: metapivot
+          __path__: /app/logs/app_*.log
+```
+
+### 任务详情接口增强
+
+`GET /api/v1/agent/tasks/{task_id}` 响应新增字段（便于追踪任务耗时）：
+
+```json
+{
+  "task_id": "task_xxx",
+  "status": "completed",
+  "total_tokens": 1234,
+  "created_at": "2026-07-04T10:00:00",
+  "updated_at": "2026-07-04T10:00:05",
+  "finished_at": "2026-07-04T10:00:05.123",
+  "duration_ms": 5123,
+  "steps": [...]
+}
+```
+
+`finished_at` 在 `_run_task` 的 `update_task_status` 中设置（接近终态），`duration_ms` 由 ORM 计算。判断任务是否真正结束应查 `finished_at` 非空，而非 `status` 字段。
+
+## 八、下一步
 
 - 阅读 [架构设计](architecture.md) 了解系统全貌
 - 阅读 [API规范](api-spec.md) 接入所有端点
 - 阅读 [数据模型](data-model.md) 了解存储结构
+- 阅读 [生产级升级路线图](production-readiness.md) 了解监控/告警/Celery 等下一步
 - 配置工作流编排器创建第一个工作流
 - 通过MCP接入企业内部系统API

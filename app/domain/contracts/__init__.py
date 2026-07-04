@@ -11,6 +11,17 @@
 from app.domain.contracts.cache import ICache
 from app.domain.contracts.event_bus import IEventBus
 from app.domain.contracts.llm import ILLMProvider
+from app.domain.contracts.memory import IMemoryStore
+from app.domain.contracts.scheduler import IScheduler
+from app.domain.contracts.token_counter import ITokenCounter
 from app.domain.contracts.vector import IVectorStore
 
-__all__ = ["ICache", "IEventBus", "ILLMProvider", "IVectorStore"]
+__all__ = [
+    "ICache",
+    "IEventBus",
+    "ILLMProvider",
+    "IMemoryStore",
+    "IScheduler",
+    "ITokenCounter",
+    "IVectorStore",
+]

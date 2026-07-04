@@ -85,7 +85,8 @@ app/infra/                    # Infra 层提供实现，工厂模式按配置切
 - **向量库**：LocalVectorStore / Milvus 可切换（IVectorStore Protocol）
 - **MCP**：mcp + FastMCP
 - **IM SDK**：dingtalk-stream / lark-oapi / pycryptodome（可选）
-- **日志**：loguru（文件轮转，保留 3 天）
+- **日志**：loguru（文件轮转，保留 3 天，`APP_LOG_FORMAT=json` 输出 ELK/Loki 友好结构化日志）
+- **监控**：Prometheus 指标（`prometheus_client`），`/metrics` 端点暴露 HTTP/Agent/LLM/Skill/Workflow 5 组业务指标
 
 ## 快速开始（详细）
 
@@ -131,11 +132,25 @@ curl http://localhost:8000/health
 # 就绪检查
 curl http://localhost:8000/ready
 
+# Prometheus 指标（5 组业务指标：HTTP/Agent/LLM/Skill/Workflow）
+curl http://localhost:8000/metrics
+
 # 登录获取 Token
 curl -X POST http://localhost:8000/api/v1/auth/token \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"admin123"}'
 ```
+
+**生产环境推荐开启 JSON 日志**（ELK/Loki 友好）：
+
+```bash
+# .env 配置
+APP_LOG_FORMAT=json         # text（开发彩色）/ json（生产结构化）
+APP_LOG_LEVEL=INFO          # DEBUG/INFO/WARNING/ERROR
+APP_LOG_RETENTION_DAYS=3    # 文件轮转保留天数
+```
+
+JSON 日志字段：`ts` / `level` / `logger` / `module` / `function` / `line` / `message` / `extra`（含 request_id/trace_id/user_id 上下文）/ `exception`。
 
 ## 项目结构
 
@@ -204,6 +219,50 @@ docker run -p 8000:8000 -v $(pwd)/data:/app/data metapivot
 # 大型企业（完整栈）
 docker-compose up -d
 ```
+
+## 监控与可观测性
+
+### Prometheus 指标
+
+`/metrics` 端点暴露 5 组业务指标（`prometheus_client` 0.21.1），可直接接入 Grafana 看板：
+
+| 指标 | 类型 | 说明 |
+|------|------|------|
+| `metapivot_http_requests_total` | Counter | HTTP 请求计数（method/path/status 维度） |
+| `metapivot_http_request_duration_seconds` | Histogram | HTTP 请求延迟（含 P50/P95/P99） |
+| `metapivot_agent_tasks_total` | Counter | Agent 任务计数（status：completed/failed/cancelled） |
+| `metapivot_agent_active_tasks` | Gauge | 当前活跃 Agent 任务数 |
+| `metapivot_agent_token_usage_total` | Counter | Agent Token 用量（prompt/completion/total） |
+| `metapivot_llm_calls_total` | Counter | LLM 调用计数（model/status 维度） |
+| `metapivot_skill_calls_total` | Counter | Skill 调用计数（skill_name/status 维度） |
+| `metapivot_workflow_executions_total` | Counter | 工作流执行计数（status 维度） |
+
+**Grafana PromQL 示例**：
+```promql
+# Agent 任务成功率（5 分钟窗口）
+sum(rate(metapivot_agent_tasks_total{status="completed"}[5m])) /
+sum(rate(metapivot_agent_tasks_total[5m]))
+
+# LLM P99 延迟
+histogram_quantile(0.99, sum(rate(metapivot_llm_call_duration_seconds_bucket[5m])) by (le, model))
+
+# 当前活跃任务数
+metapivot_agent_active_tasks
+```
+
+### 结构化 JSON 日志
+
+生产环境（`APP_LOG_FORMAT=json`）输出单行 JSON，ELK/Loki 直接采集：
+
+```json
+{"ts":"2026-07-04T10:30:00.123+08:00","level":"INFO","logger":"agent_graph","module":"graph","function":"run_agent","line":50,"message":"Agent started","extra":{"request_id":"req_abc","trace_id":"trace_def","user_id":"u_admin"}}
+```
+
+**关键设计**：
+- `request_id` / `trace_id` / `user_id` 通过 contextvars 跨 asyncio.create_task 自动传播
+- 异常 traceback 完整序列化到 `exception` 字段（多行 join）
+- `<` `>` 转义为 `\u003c` `\u003e` 避免 loguru Colorizer 误解析
+- 文件按天轮转，保留 3 天，错误日志独立 `logs/error_YYYY-MM-DD.log`
 
 ## 安全说明
 

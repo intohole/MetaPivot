@@ -30,6 +30,7 @@ langgraph==0.2.68
 langgraph-checkpoint-postgres==2.0.4
 langchain-core==0.3.28
 langchain-openai==0.3.1
+tiktoken==0.8.0  # OpenAI token 计数（精确），不可用时降级为字符估算
 
 # MCP
 mcp==1.27.1
@@ -46,6 +47,9 @@ celery[redis]==5.4.0
 
 # 日志
 loguru==0.7.3
+
+# 指标监控
+prometheus_client==0.21.1
 
 # 安全
 pyjwt==2.10.1

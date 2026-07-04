@@ -23,6 +23,16 @@ Version: 1.0.0
 ### GET /ready - 就绪检查（无需认证）
 200/503: `{status:string, dependencies:{db:{backend:string, ok:boolean}, cache:{backend:string, ok:boolean}, vector:{backend:string}}}`
 
+### GET /metrics - Prometheus 指标端点（无需认证）
+200: `text/plain; version=0.0.4; charset=utf-8` — Prometheus 文本格式
+指标分组：
+- `metapivot_http_requests_total{method,path,status}` / `metapivot_http_request_duration_seconds{method,path}` — HTTP 请求计数/延迟（路径归一化：动态 ID → {id}）
+- `metapivot_agent_tasks_total{status}` / `metapivot_agent_active_tasks` / `metapivot_agent_task_duration_seconds` / `metapivot_agent_token_usage_total{type}` — Agent 任务指标
+- `metapivot_llm_calls_total{model,status}` / `metapivot_llm_call_duration_seconds{model}` — LLM 调用指标
+- `metapivot_skill_calls_total{skill_name,status}` — Skill 调用指标
+- `metapivot_workflow_executions_total{status}` — 工作流执行指标
+注意：任务指标在任务到达终态（finished_at 非空）后才会出现，FAILED 任务也会采集。
+
 ## 认证
 - JWT: `Authorization: Bearer <token>`
 - 获取方式: `POST /api/v1/auth/token` Body: `{username*:string, password*:string}` 200: `{token:string, expires_in:integer}`
@@ -252,3 +262,6 @@ Body: `{value*:string}`
 ### GET /ready - 就绪检查 | 无需认证
 200: `{status:string="ready", dependencies:object}`
 503: `{status:string="not_ready", dependencies:object}`
+
+### GET /metrics - Prometheus 指标 | 无需认证
+200: Prometheus text format — `/metrics` 端点暴露 HTTP/Agent/LLM/Skill/Workflow 5 组业务指标，详见上文「健康检查」章节。

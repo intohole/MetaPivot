@@ -11,24 +11,28 @@
 持久化逻辑委托给 agent_persister helper，保持本类聚焦业务编排。
 """
 import asyncio
-from typing import AsyncGenerator
-
-from sqlalchemy import func, select
+from datetime import datetime
+from typing import AsyncGenerator, Optional
 
 from app.domain.agent.graph import resume_agent, run_agent
 from app.domain.agent.state import AgentState, AgentStatus
 from app.domain.agent.stream import stream_manager
-from app.infra.db.models_core import AgentTaskORM, AgentTaskStepORM
+from app.domain.contracts.memory import IMemoryStore
+from app.infra.db.models_core import AgentTaskORM
 from app.infra.db.session import get_db_session
 from app.service.agent_persister import (
+    audit_task_event,
+    audit_task_result,
+    get_agent_task,
+    list_agent_tasks,
     persist_state,
     persist_steps,
     rebuild_state,
-    step_dict,
     update_task_status,
 )
 from app.utils.config import settings
 from app.utils.logger import get_logger
+from app.utils.metrics import agent_task_finished, record_agent_task
 from app.utils.response import AppError, ErrorCode
 
 log = get_logger("agent_service")
@@ -39,6 +43,17 @@ class AgentService:
 
     # 运行中任务引用（避免被GC）
     _running_tasks: dict[str, asyncio.Task] = {}
+    # 多轮对话记忆存储（DI 注入，避免 Domain 层直接依赖 Infra）
+    _memory_store: Optional[IMemoryStore] = None
+
+    def set_memory_store(self, store: IMemoryStore) -> None:
+        """DI 注入记忆存储（由 main.py lifespan 调用）
+
+        避免在 Domain/Service 层直接 import Infra 层的 memory factory，
+        保持分层依赖方向：route→service→domain→contracts（不向下到 infra）。
+        """
+        self._memory_store = store
+        log.info("MemoryStore injected into AgentService")
 
     # ============ 任务生命周期 ============
 
@@ -72,6 +87,8 @@ class AgentService:
         self._running_tasks[task_id] = bg
         bg.add_done_callback(lambda t: self._running_tasks.pop(task_id, None))
 
+        from app.utils.metrics import agent_task_started
+        agent_task_started()
         return {
             "task_id": task_id,
             "status": "pending",
@@ -83,9 +100,26 @@ class AgentService:
         chat_id: str, user_id: str, context: dict,
     ) -> None:
         """后台执行 Agent 状态机"""
+        from app.utils.context import get_request_id, set_request_context
+        request_id = get_request_id()
+        if not request_id:
+            import uuid as _uuid
+            request_id = f"task-{_uuid.uuid4().hex[:8]}"
+            set_request_context(request_id, user_id=user_id or "")
+
+        started_at = datetime.now()
+        # 加载多轮对话历史（跨任务记忆，企业办公"刚才那个"场景）
+        history_messages: list[dict] = []
+        if chat_id and self._memory_store is not None:
+            try:
+                history_messages = await self._memory_store.load_history(chat_id, limit=20)
+            except Exception as e:
+                log.warning("load_history failed for {}: {}", chat_id, e)
+
         state = AgentState(
             task_id=task_id, user_id=user_id, channel=channel, chat_id=chat_id,
             original_message=message, context=context, max_steps=settings.llm_max_steps,
+            messages=list(history_messages), started_at=started_at,
         )
         await persist_state(task_id, state)
 
@@ -94,17 +128,41 @@ class AgentService:
                 await stream_manager.publish(task_id, event)
                 await persist_state(task_id, state)
             await persist_steps(task_id, state)
-            await update_task_status(task_id, state.status.value, state.result, state.error)
+            await update_task_status(
+                task_id, state.status.value, state.result, state.error,
+                total_tokens=state.total_tokens, started_at=started_at,
+            )
+            await self._persist_to_memory(chat_id, message, state.final_answer)
         except Exception as e:
             log.exception("Agent task {} crashed: {}", task_id, e)
             state.status = AgentStatus.FAILED
             state.error = {"code": "AGENT_ERROR", "message": str(e)}
             await stream_manager.publish(task_id, {"type": "error", "data": state.error})
-            await update_task_status(task_id, "failed", None, state.error)
+            await update_task_status(
+                task_id, "failed", None, state.error,
+                total_tokens=state.total_tokens, started_at=started_at,
+            )
+            await self._persist_to_memory(chat_id, message, "")
         finally:
+            duration = (datetime.now() - started_at).total_seconds() if started_at else None
             stream_manager.mark_finished(task_id)
-            # 延迟清理（保留历史事件5分钟供后续订阅）
+            agent_task_finished()
+            record_agent_task(state.status.value, duration)
+            await audit_task_result(task_id, user_id, channel, message, state, started_at, request_id)
             asyncio.get_running_loop().call_later(300, stream_manager.cleanup, task_id)
+
+    async def _persist_to_memory(
+        self, chat_id: str, user_message: str, assistant_answer: str
+    ) -> None:
+        """持久化本轮对话到记忆存储（user + assistant 消息）"""
+        if not chat_id or not self._memory_store or not user_message:
+            return
+        try:
+            await self._memory_store.append_message(chat_id, "user", user_message)
+            if assistant_answer:
+                await self._memory_store.append_message(chat_id, "assistant", assistant_answer)
+        except Exception as e:
+            log.warning("persist_to_memory failed for {}: {}", chat_id, e)
 
     # ============ 查询 ============
 
@@ -113,52 +171,11 @@ class AgentService:
         user_id: str = "", status: str = "",
     ) -> tuple[list[dict], int]:
         """查询任务列表（user_id 为空时返回全部，admin 场景）"""
-        async with get_db_session() as session:
-            stmt = select(AgentTaskORM)
-            if user_id:
-                stmt = stmt.where(AgentTaskORM.user_id == user_id)
-            if status:
-                stmt = stmt.where(AgentTaskORM.status == status)
-            total = (await session.execute(
-                select(func.count()).select_from(stmt.subquery())
-            )).scalar() or 0
-            stmt = (stmt.order_by(AgentTaskORM.created_at.desc())
-                    .offset((page - 1) * page_size).limit(page_size))
-            items = (await session.execute(stmt)).scalars().all()
-            return [self._task_summary(t) for t in items], total
-
-    @staticmethod
-    def _task_summary(t: AgentTaskORM) -> dict:
-        """任务列表项摘要（不含 steps，减少传输量）"""
-        return {
-            "task_id": t.id, "status": t.status, "channel": t.channel,
-            "user_id": t.user_id, "result": t.result,
-            "created_at": t.created_at.isoformat() if t.created_at else None,
-            "updated_at": t.updated_at.isoformat() if t.updated_at else None,
-        }
+        return await list_agent_tasks(page, page_size, user_id, status)
 
     async def get_task(self, task_id: str, user_id: str = "") -> dict:
-        async with get_db_session() as session:
-            task = await session.get(AgentTaskORM, task_id)
-            if task is None:
-                raise AppError(ErrorCode.AGENT_TASK_NOT_FOUND, status_code=404)
-            # 越权防护：仅任务发起人可查询（admin 由路由层 require_permission 放行）
-            if user_id and task.user_id and task.user_id != user_id:
-                raise AppError(ErrorCode.AUTH_PERMISSION_DENIED, "无权访问该任务", 403)
-            steps = (await session.execute(
-                select(AgentTaskStepORM)
-                .where(AgentTaskStepORM.task_id == task_id)
-                .order_by(AgentTaskStepORM.step_index)
-            )).scalars().all()
-            return {
-                "task_id": task.id,
-                "status": task.status,
-                "result": task.result,
-                "steps": [step_dict(s) for s in steps],
-                "created_at": task.created_at.isoformat() if task.created_at else None,
-                "updated_at": task.updated_at.isoformat() if task.updated_at else None,
-                "error": task.error,
-            }
+        """查询任务详情（含 steps；越权防护：仅任务发起人，admin 由路由层放行）"""
+        return await get_agent_task(task_id, user_id)
 
     async def stream_task(self, task_id: str, user_id: str = "") -> AsyncGenerator[dict, None]:
         """SSE 订阅任务事件流"""
@@ -174,7 +191,8 @@ class AgentService:
             while True:
                 event = await queue.get()
                 yield event
-                if event.get("type") == "stream_end":
+                # 识别 stream_end 和 cancelled 两种终止事件
+                if event.get("type") in ("stream_end", "cancelled"):
                     return
         finally:
             stream_manager.unsubscribe(task_id, queue)
@@ -207,21 +225,44 @@ class AgentService:
         bg = asyncio.create_task(self._resume_task(task_id, state))
         self._running_tasks[task_id] = bg
         bg.add_done_callback(lambda t: self._running_tasks.pop(task_id, None))
+        from app.utils.context import get_request_id
+        await audit_task_event(
+            task_id, user_id, "agent.task.confirm",
+            {"decision": decision, "modifications": modifications}, request_id=get_request_id(),
+        )
         return {"task_id": task_id, "status": "executing"}
 
     async def _resume_task(self, task_id: str, state: AgentState) -> None:
         """恢复 HITL 暂停的任务"""
+        from app.utils.context import get_request_id, set_request_context
+        request_id = get_request_id()
+        if not request_id:
+            import uuid as _uuid
+            request_id = f"resume-{_uuid.uuid4().hex[:8]}"
+            set_request_context(request_id, user_id=state.user_id or "")
+
+        started_at = state.started_at or datetime.now()
         try:
             async for event in resume_agent(state):
                 await stream_manager.publish(task_id, event)
                 await persist_state(task_id, state)
             await persist_steps(task_id, state)
-            await update_task_status(task_id, state.status.value, state.result, state.error)
+            await update_task_status(
+                task_id, state.status.value, state.result, state.error,
+                total_tokens=state.total_tokens, started_at=started_at,
+            )
         except Exception as e:
             log.exception("Agent resume {} failed: {}", task_id, e)
-            await update_task_status(task_id, "failed", None, {"message": str(e)})
+            await update_task_status(
+                task_id, "failed", None, {"message": str(e)},
+                total_tokens=state.total_tokens, started_at=started_at,
+            )
         finally:
+            duration = (datetime.now() - started_at).total_seconds() if started_at else None
             stream_manager.mark_finished(task_id)
+            agent_task_finished()
+            record_agent_task(state.status.value, duration)
+            await audit_task_result(task_id, state.user_id, state.channel, state.original_message, state, started_at, request_id)
 
     # ============ 取消 ============
 
@@ -235,11 +276,21 @@ class AgentService:
             if task.user_id and task.user_id != user_id:
                 raise AppError(ErrorCode.AUTH_PERMISSION_DENIED, "仅任务发起人可取消", 403)
             task.status = "cancelled"
+            if task.started_at:
+                task.finished_at = datetime.now()
+                task.duration_ms = int((task.finished_at - task.started_at).total_seconds() * 1000)
         bg = self._running_tasks.pop(task_id, None)
         if bg and not bg.done():
             bg.cancel()
         await stream_manager.publish(task_id, {"type": "cancelled", "data": {}})
         stream_manager.mark_finished(task_id)
+        agent_task_finished()
+        record_agent_task("cancelled", task.duration_ms / 1000 if task.duration_ms else None)
+        from app.utils.context import get_request_id
+        await audit_task_event(
+            task_id, user_id, "agent.task.cancel",
+            {"message": task.original_message}, status="cancelled", request_id=get_request_id(),
+        )
         return {"task_id": task_id, "status": "cancelled"}
 
 

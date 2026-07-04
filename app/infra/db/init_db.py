@@ -8,6 +8,7 @@ from app.infra.db.models_user_skill import UserORM, SkillORM, MCPServerORM
 from app.infra.db.models_core import (
     WorkflowORM, WorkflowExecutionORM, AgentTaskORM, AgentTaskStepORM,
     AuditLogORM, KnowledgeDocumentORM, IMChatORM, IMMessageORM, ConfigORM,
+    ChatMessageORM, ChatSummaryORM, ScheduledTaskORM,
 )
 from app.utils.config import settings
 from app.utils.logger import get_logger

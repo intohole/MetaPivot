@@ -1,11 +1,13 @@
 """LLM 意图分类器 - 替代关键词规则匹配
 
 策略：
-1. 若无可用工具 → 直接 pipeline 模式（简单问答）
-2. 若有工具 → 调用 LLM 进行结构化意图分类
-3. LLM 失败时降级为关键词规则（兜底）
+1. 若消息含定时关键词 → 调 LLM 解析定时任务，返回 SCHEDULE 模式
+2. 若无可用工具 → 直接 pipeline 模式（简单问答）
+3. 若有工具 → 调用 LLM 进行结构化意图分类
+4. LLM 失败时降级为关键词规则（兜底）
 
-输出：(mode, intent) 二元组
+输出：classify_intent 返回三元组 (mode, intent, schedule_result)
+schedule_result 非 None 时表示检测到定时任务（mode=SCHEDULE）
 """
 import json
 from typing import Optional
@@ -25,8 +27,8 @@ async def classify_intent(
     message: str,
     tools: list[dict],
     llm_provider: Optional[object] = None,
-) -> tuple[AgentMode, str]:
-    """LLM 意图分类
+) -> tuple[AgentMode, str, Optional[object]]:
+    """LLM 意图分类（含定时任务识别）
 
     Args:
         message: 用户原始消息
@@ -34,26 +36,38 @@ async def classify_intent(
         llm_provider: LLM Provider 实例（延迟注入避免循环依赖）
 
     Returns:
-        (mode, intent_description)
+        (mode, intent_description, schedule_result) 三元组
+        schedule_result: ScheduleParseResult 或 None，非 None 时表示检测到定时任务
     """
+    # 第一步：检测定时任务意图（在所有其他判断之前）
+    if llm_provider is not None:
+        try:
+            from app.domain.agent.schedule_parser import has_schedule_intent, parse_schedule
+            if has_schedule_intent(message):
+                result = await parse_schedule(message, llm_provider)
+                if result.is_scheduled:
+                    return AgentMode.SCHEDULE, f"schedule:{result.recurring}", result
+        except Exception as e:
+            log.warning("schedule parse in classify_intent failed: {}", e)
+
     # 无工具 → 直接 pipeline
     if not tools:
-        return AgentMode.PIPELINE, "qa_no_tools"
+        return AgentMode.PIPELINE, "qa_no_tools", None
 
     # 短消息（< 4 字符）且无明显工具意图 → pipeline 快速路径
     if len(message) < 4 and not any(kw in message for kw in _AGENT_KEYWORDS):
-        return AgentMode.PIPELINE, "short_qa"
+        return AgentMode.PIPELINE, "short_qa", None
 
     # LLM 分类
     if llm_provider is not None:
         try:
             mode, intent = await _llm_classify(message, tools, llm_provider)
-            return mode, intent
+            return mode, intent, None
         except Exception as e:
             log.warning("LLM intent classification failed, fallback to keywords: {}", e)
 
     # 兜底：关键词规则
-    return _keyword_classify(message)
+    return (*_keyword_classify(message), None)
 
 
 async def _llm_classify(

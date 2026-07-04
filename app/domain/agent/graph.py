@@ -11,7 +11,6 @@
 - 通过 async generator 实现 stream 推送（含 token 级流式回复）
 """
 import asyncio
-import json
 from typing import AsyncGenerator
 
 from app.domain.agent.nodes import (
@@ -22,6 +21,7 @@ from app.domain.agent.nodes import (
     reflector_node,
     replier_node,
 )
+from app.domain.agent.scheduler_node import scheduler_node
 from app.domain.agent.prompts import REPLY_PROMPT, SYSTEM_PROMPT
 from app.domain.agent.state import AgentMode, AgentState, AgentStatus
 from app.utils.logger import get_logger
@@ -42,15 +42,33 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
     遇到 WAITING_CONFIRM 则暂停（yield 事件后返回，等待 confirm 恢复）
 
     最终回复优先使用流式输出（token 事件），失败时降级为非流式。
+    每个节点执行后会通过 state.add_event() 累积节点级事件（step_started/llm_call/stuck_detected 等），
+    这里统一 drain 并 yield 到 SSE，保证链路可见性。
     """
     try:
         # 1. 意图分类（LLM）
         state = await _advance(intent_node, state)
+        for ev in _drain_events(state):
+            yield ev
         yield _event("intent_completed", {"mode": state.mode.value, "intent": state.intent})
 
         # 2. 规划
         state = await _advance(planner_node, state)
+        for ev in _drain_events(state):
+            yield ev
         yield _event("planning_completed", {})
+
+        # 2.1 定时任务模式：路由到 scheduler_node（创建调度任务后直接结束）
+        if state.mode == AgentMode.SCHEDULE:
+            state = await _advance(scheduler_node, state)
+            for ev in _drain_events(state):
+                yield ev
+            yield _event("final_result", {
+                "answer": state.final_answer,
+                "result": state.result,
+            })
+            state.status = AgentStatus.COMPLETED
+            return
 
         # 3. 执行循环（并行工具调用）
         loop_count = 0
@@ -62,6 +80,8 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
 
             if state.status == AgentStatus.REFLECTING:
                 state = await _advance(reflector_node, state)
+                for ev in _drain_events(state):
+                    yield ev
                 yield _event("reflected", {"status": state.status.value})
                 if state.status == AgentStatus.COMPLETED:
                     break
@@ -71,6 +91,8 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
 
             if state.status == AgentStatus.EXECUTING:
                 state = await _advance(executor_node, state)
+                for ev in _drain_events(state):
+                    yield ev
                 yield _event("step_completed", {
                     "step": state.current_step,
                     "status": state.status.value,
@@ -83,6 +105,8 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
 
             if state.status == AgentStatus.WAITING_CONFIRM:
                 state = await _advance(hitl_node, state)
+                for ev in _drain_events(state):
+                    yield ev
                 yield _event("hitl_paused", state.pending_confirm or {})
                 return  # 暂停
 
@@ -90,6 +114,15 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
             break
 
         # 4. 生成最终回复（优先流式）
+        # FAILED 状态直接结束，不再调用 LLM（避免 tenacity 重试拖慢 finally 块执行）
+        if state.status == AgentStatus.FAILED:
+            yield _event("final_result", {
+                "answer": state.final_answer or "",
+                "result": state.result,
+                "error": state.error,
+            })
+            return  # 不覆盖 FAILED 状态
+
         if state.status != AgentStatus.COMPLETED:
             # 尝试流式回复，逐 token 推送
             async for token_event in _stream_final_reply(state):
@@ -98,6 +131,8 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
             # 流式失败（state 仍非 COMPLETED），降级为非流式
             if state.status != AgentStatus.COMPLETED:
                 state = await _advance(replier_node, state)
+                for ev in _drain_events(state):
+                    yield ev
 
         yield _event("final_result", {
             "answer": state.final_answer,
@@ -220,3 +255,14 @@ async def _advance(node_fn, state: AgentState) -> AgentState:
 def _event(event_type: str, data: dict) -> dict:
     """构造 SSE 事件"""
     return {"type": event_type, "data": data}
+
+
+def _drain_events(state: AgentState) -> list[dict]:
+    """提取节点累积的节点级事件（step_started/llm_call/stuck_detected 等）
+
+    节点通过 state.add_event() 累积事件，run_agent 在每个节点执行后调用本函数
+    将事件 drain 到 SSE，保证链路可见性（节点级事件原本永远不到达订阅者）。
+    """
+    events = list(state.events)
+    state.events.clear()
+    return events
