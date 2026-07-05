@@ -182,7 +182,7 @@ def build_system_prompt(state) -> str:
         f"- Token 累计: {state.total_tokens}\n"
         f"当步数接近上限时，请调用 finish 工具主动收尾，输出当前已获得的信息摘要。"
     )
-    prompt = SYSTEM_PROMPT + budget
+    prompt = SYSTEM_PROMPT + "\n\n" + EXECUTE_PROMPT + budget
     # Phase B3: 注入反思修正建议（reflector 输出 hint，executor 用以纠正方向）
     hint = state.context.get("reflection_hint") if state.context else None
     if hint:

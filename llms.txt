@@ -173,6 +173,10 @@ Body: `{inputs?:object, chat_id?:string, user_id?:string}`
 200: `{execution_id:string, workflow_id:string, status:string, current_node:string, inputs:object, outputs:object, started_at:string, finished_at:string, error:object}`
 status枚举: pending/running/paused/completed/failed/cancelled
 
+### POST /api/v1/workflows/executions/{execution_id}/resume - 恢复 HITL 暂停的工作流 | JWT(需workflow:execute)
+请求体: `{decision:string="approve|reject|modify", modifications:object|null}`
+200: `{execution_id:string, status:string="running|cancelled"}`
+
 ---
 
 ## Skill管理组

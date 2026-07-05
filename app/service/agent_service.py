@@ -327,6 +327,35 @@ class AgentService:
         """查询任务列表（user_id 为空时返回全部，admin 场景）"""
         return await list_agent_tasks(page, page_size, user_id, status)
 
+    async def start_task_and_wait(
+        self,
+        message: str,
+        channel: str = "workflow",
+        chat_id: str = "",
+        user_id: str = "",
+        context: dict = None,
+        timeout: int = 120,
+    ) -> dict:
+        """启动 Agent 任务并同步等待结果（工作流 agent_call 节点用）
+
+        与 start_task 的区别：start_task 立即返回 task_id（异步执行），
+        本方法轮询 task 状态直到终态或超时，返回完整 task dict。
+        工作流 agent_call 节点需要同步获取 Agent 结果，用此方法。
+        """
+        result = await self.start_task(
+            message=message, channel=channel, chat_id=chat_id,
+            user_id=user_id, context=context or {},
+        )
+        task_id = result["task_id"]
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            task = await get_agent_task(task_id)
+            status = task.get("status", "")
+            if status in ("completed", "failed", "cancelled"):
+                return task
+            await asyncio.sleep(0.5)
+        raise asyncio.TimeoutError(f"Agent task {task_id} timeout ({timeout}s)")
+
     async def search_memory(
         self, query: str, chat_id: str = "", top_k: int = 5,
     ) -> list[dict]:

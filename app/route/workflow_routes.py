@@ -118,6 +118,34 @@ async def get_execution(
     return ok(await workflow_service.get_execution(execution_id), request)
 
 
+class ResumeRequest(BaseModel):
+    """工作流恢复请求（HITL 暂停后用户决策）"""
+    decision: str = Field(..., description="决策: approve/reject/modify")
+    modifications: dict | None = Field(default=None, description="修改参数（decision=modify 时用）")
+
+
+@router.post("/executions/{execution_id}/resume", summary="恢复 HITL 暂停的工作流")
+async def resume_workflow_execution(
+    execution_id: str,
+    body: ResumeRequest,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("workflow:execute")),
+):
+    """恢复 HITL 暂停的工作流执行
+
+    decision:
+    - approve: 批准继续执行
+    - reject: 拒绝并取消工作流
+    - modify: 应用 modifications 后继续执行
+    """
+    from app.service.workflow_service import workflow_service
+    return ok(await workflow_service.resume_execution(
+        execution_id=execution_id,
+        decision=body.decision,
+        modifications=body.modifications or {},
+    ), request)
+
+
 def _workflow_dict(w) -> dict:
     return {
         "id": w.id,
