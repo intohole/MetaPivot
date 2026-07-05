@@ -171,17 +171,22 @@ async def executor_node(state: AgentState) -> dict:
          "arguments": tc.function.arguments}} for tc in tool_calls]})
 
     # 并行执行所有工具调用（Phase 1: 经 healer 自愈，return_exceptions=True 防止单个异常拖垮整体）
+    # Phase C1: 发射 tool_call SSE 事件（前端实时显示工具调用过程：started/completed/failed）
     from app.domain.agent.healer import get_healer
     healer = get_healer()
+    for tc in tool_calls:
+        state.add_event("tool_call", {"tool": tc.function.name, "args": tc.function.arguments, "status": "started"})
     tasks = [healer.execute_with_healing(state, tc, execute_tool_call) for tc in tool_calls]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     step_records: list[StepRecord] = []
-    for r in results:
+    for tc, r in zip(tool_calls, results):
         if isinstance(r, Exception):
-            step_records.append(StepRecord(  # 构造失败 StepRecord（参考 LangGraph ToolNode）
-                step_index=state.current_step, step_name="call_failed", tool_name="unknown",
+            state.add_event("tool_call", {"tool": tc.function.name, "status": "failed", "error": str(r)})
+            step_records.append(StepRecord(
+                step_index=state.current_step, step_name="call_failed", tool_name=tc.function.name,
                 status="failed", error=str(r), tool_output={"error": str(r)}, duration_ms=0))
         else:
+            state.add_event("tool_call", {"tool": tc.function.name, "status": "completed", "result": getattr(r, "tool_output", None)})
             step_records.append(r)
 
     # 附加 LLM 调用元数据到步骤（token 用量 + LLM 耗时，便于成本/性能分析）

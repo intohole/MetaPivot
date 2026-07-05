@@ -1,4 +1,4 @@
-/* Agent 任务页 — 对话界面 + 任务历史 + SSE 实时订阅 */
+/* Agent 任务页 — 对话界面 + 任务历史 + SSE 实时流式订阅 + Markdown 渲染 */
 (function () {
   const { ref, reactive, onMounted, computed, nextTick } = Vue
   window.Pages = window.Pages || {}
@@ -16,6 +16,7 @@
       const history = ref([])
       const streaming = ref(false)
       const chatBox = ref(null)
+      let abortSSE = null  // SSE 订阅取消函数
 
       const columns = [
         { key: 'task_id', label: '任务ID', width: '120px' },
@@ -24,6 +25,7 @@
       ]
 
       const canSend = computed(() => inputMsg.value.trim() && !streaming.value)
+      const renderMarkdown = window.renderMarkdown || ((t) => t)
 
       const loadHistory = async () => {
         try {
@@ -46,48 +48,84 @@
         taskSteps.length = 0
 
         try {
+          // Phase C1: stream=true 触发后端返回 task_id，前端再走 SSE 订阅
           const data = await window.API.post('/agent/chat', {
-            message: msg, channel: 'api', stream: false
+            message: msg, channel: 'api', stream: true
           })
           currentTaskId.value = data.task_id
           state.notify('Agent 任务已创建：' + data.task_id.slice(0, 8), 'info')
-          // 轮询任务状态（简化版，SSE 可后续接入）
-          pollTaskStatus(data.task_id)
+          // SSE 流式订阅（替代 2s 轮询）
+          const streamPath = '/agent/tasks/' + data.task_id + '/stream'
+          abortSSE = window.API.streamSSE(streamPath, onSSEEvent, onSSEError, onSSEClose)
         } catch (e) {
           streaming.value = false
         }
       }
 
-      const pollTaskStatus = async (taskId) => {
-        const maxRounds = 60
-        for (let i = 0; i < maxRounds; i++) {
-          try {
-            const t = await window.API.get('/agent/tasks/' + taskId)
-            taskStatus.value = t.status
-            if (t.steps?.length) {
-              taskSteps.length = 0
-              taskSteps.push(...t.steps)
-            }
-            if (['completed', 'failed', 'cancelled'].includes(t.status)) {
-              streaming.value = false
-              if (t.result?.content) {
-                messages.push({ role: 'assistant', content: t.result.content, time: new Date().toLocaleTimeString() })
-              } else if (t.status === 'failed' && t.error) {
-                messages.push({ role: 'assistant', content: '⚠️ 任务失败：' + (t.error.message || '未知错误'), time: new Date().toLocaleTimeString() })
-              }
-              scrollToBottom()
-              loadHistory()
-              return
-            }
-            if (t.status === 'waiting_confirm') waitingConfirm.value = true
-            await new Promise(r => setTimeout(r, 2000))
-          } catch (e) {
+      // SSE 事件处理 — 各事件类型参考 llms.txt
+      const onSSEEvent = (ev) => {
+        let data = {}
+        try { data = JSON.parse(ev.data || '{}') } catch (e) { data = {} }
+        switch (ev.event) {
+          case 'step_started':
+            taskStatus.value = 'executing'
+            break
+          case 'step_completed':
+            taskStatus.value = 'executing'
+            break
+          case 'tool_call':
+            // {tool, args, status: started/completed/failed, result/error}
+            taskSteps.push({
+              action: 'tool_call',
+              tool: data.tool,
+              status: data.status,
+              summary: data.status === 'started' ? '调用 ' + data.tool
+                     : data.status === 'completed' ? '✓ ' + data.tool
+                     : '✗ ' + data.tool,
+              detail: data.error || '',
+            })
+            scrollToBottom()
+            break
+          case 'human_confirm_required':
+            waitingConfirm.value = true
+            taskStatus.value = 'waiting_confirm'
+            break
+          case 'final_result':
             streaming.value = false
-            return
-          }
+            taskStatus.value = 'completed'
+            if (data.content || data.answer) {
+              messages.push({ role: 'assistant', content: data.content || data.answer, time: new Date().toLocaleTimeString() })
+            }
+            scrollToBottom()
+            loadHistory()
+            break
+          case 'error':
+            streaming.value = false
+            taskStatus.value = 'failed'
+            messages.push({ role: 'assistant', content: '⚠️ 任务失败：' + (data.message || '未知错误'), time: new Date().toLocaleTimeString() })
+            scrollToBottom()
+            loadHistory()
+            break
+          case 'cancelled':
+          case 'stream_end':
+            streaming.value = false
+            if (taskStatus.value !== 'failed') taskStatus.value = taskStatus.value || 'completed'
+            loadHistory()
+            break
+          default:
+            // intent_completed / planning_completed / reflected / hitl_paused / token 等
+            if (ev.event) taskSteps.push({ action: ev.event, summary: '', detail: '' })
+            break
         }
+      }
+
+      const onSSEError = (e) => {
         streaming.value = false
-        state.notify('任务超时，请稍后查看结果', 'warning')
+        state.notify('SSE 连接失败：' + (e.message || '未知错误'), 'error')
+      }
+
+      const onSSEClose = () => {
+        streaming.value = false
       }
 
       const handleConfirm = async (decision) => {
@@ -101,8 +139,10 @@
       const cancelTask = async () => {
         if (!currentTaskId.value) return
         try {
+          if (abortSSE) { abortSSE(); abortSSE = null }
           await window.API.post('/agent/tasks/' + currentTaskId.value + '/cancel')
           streaming.value = false
+          taskStatus.value = 'cancelled'
           state.notify('任务已取消', 'info')
           loadHistory()
         } catch (e) {}
@@ -112,14 +152,16 @@
         currentTaskId.value = row.task_id
         taskStatus.value = row.status
         messages.length = 0
-        if (row.result?.content) messages.push({ role: 'assistant', content: row.result.content, time: row.created_at })
+        if (row.result?.content || row.result?.answer) {
+          messages.push({ role: 'assistant', content: row.result.content || row.result.answer, time: row.created_at })
+        }
       }
 
       onMounted(loadHistory)
 
       return {
         messages, inputMsg, currentTaskId, taskStatus, taskSteps, waitingConfirm,
-        history, streaming, canSend, chatBox, columns,
+        history, streaming, canSend, chatBox, columns, renderMarkdown,
         sendMessage, handleConfirm, cancelTask, viewHistory, state
       }
     },
@@ -139,7 +181,8 @@
                    :class="['flex', m.role === 'user' ? 'justify-end' : 'justify-start']">
                 <div :class="['max-w-[80%] px-4 py-2 rounded-lg text-sm',
                               m.role === 'user' ? 'bg-brand text-white' : 'bg-surface border border-border text-ink']">
-                  <p class="whitespace-pre-wrap">{{ m.content }}</p>
+                  <div v-if="m.role === 'user'" class="whitespace-pre-wrap">{{ m.content }}</div>
+                  <div v-else class="markdown-body" v-html="renderMarkdown(m.content)"></div>
                   <p :class="['text-xs mt-1', m.role === 'user' ? 'text-blue-100' : 'text-ink-subtle']">{{ m.time }}</p>
                 </div>
               </div>
@@ -150,7 +193,7 @@
               </div>
             </div>
 
-            <!-- 执行步骤 -->
+            <!-- 执行步骤（含 tool_call 实时状态） -->
             <details v-if="taskSteps.length > 0" class="mb-3">
               <summary class="cursor-pointer text-sm text-ink-muted">执行步骤 ({{ taskSteps.length }})</summary>
               <ol class="mt-2 space-y-1 text-xs text-ink-muted pl-4">

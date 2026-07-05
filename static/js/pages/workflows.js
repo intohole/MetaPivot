@@ -1,6 +1,6 @@
-/* 工作流管理 — 列表 + 创建/编辑(JSON 编辑器) + 执行 + 执行历史 */
+/* 工作流管理 — 列表 + 创建/编辑(可视化 Drawflow + JSON 双模式) + 执行 + 历史 */
 (function () {
-  const { ref, reactive, onMounted, computed } = Vue
+  const { ref, reactive, onMounted, computed, watch, nextTick } = Vue
   window.Pages = window.Pages || {}
 
   window.Pages.Workflows = {
@@ -16,7 +16,10 @@
 
       const showForm = ref(false)
       const editingId = ref('')
-      const form = reactive({ name: '', description: '', definition: '{\n  "nodes": [],\n  "edges": [],\n  "variables": []\n}', enabled: true })
+      const form = reactive({ name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true })
+      const editorMode = ref('visual')  // visual | json
+      const wfContainer = ref(null)
+      const wfPalette = ref(null)
 
       const showRun = ref(false)
       const runWorkflow = ref(null)
@@ -45,27 +48,52 @@
         } finally { loading.value = false }
       }
 
+      // Phase C2: 初始化 Drawflow 编辑器（modal 打开后 nextTick 拿 DOM）
+      const initEditor = (definition) => {
+        nextTick(() => {
+          if (!wfContainer.value || !window.WorkflowEditor) return
+          if (window.WorkflowEditor.destroy) window.WorkflowEditor.destroy()
+          window.WorkflowEditor.init(wfContainer.value, (json) => {
+            form.definition = JSON.stringify(json, null, 2)  // 画布变化同步到 JSON
+          })
+          if (wfPalette.value) window.WorkflowEditor.renderPalette(wfPalette.value)
+          window.WorkflowEditor.loadJSON(definition || { nodes: [], edges: [], variables: [] })
+        })
+      }
+
       const openCreate = () => {
-        Object.assign(form, { name: '', description: '', definition: '{\n  "nodes": [],\n  "edges": [],\n  "variables": []\n}', enabled: true })
+        Object.assign(form, { name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true })
         editingId.value = ''
+        editorMode.value = 'visual'
         showForm.value = true
+        initEditor({ nodes: [], edges: [], variables: [] })
       }
 
       const openEdit = (row) => {
+        const def = row.definition || { nodes: [], edges: [], variables: [] }
         Object.assign(form, {
           name: row.name, description: row.description || '',
-          definition: JSON.stringify(row.definition || {}, null, 2),
-          enabled: row.enabled
+          definition: JSON.stringify(def, null, 2), enabled: row.enabled
         })
         editingId.value = row.id
+        editorMode.value = 'visual'
         showForm.value = true
+        initEditor(def)
       }
+
+      // modal 关闭时销毁编辑器
+      watch(showForm, (v) => { if (!v && window.WorkflowEditor) window.WorkflowEditor.destroy() })
 
       const submitForm = async () => {
         try {
+          // visual 模式从 editor 导出最新 JSON；json 模式从 textarea 解析
           let def = {}
-          try { def = JSON.parse(form.definition) } catch (e) {
-            state.notify('definition 不是合法 JSON', 'error'); return
+          if (editorMode.value === 'visual' && window.WorkflowEditor) {
+            def = window.WorkflowEditor.exportJSON()
+          } else {
+            try { def = JSON.parse(form.definition) } catch (e) {
+              state.notify('definition 不是合法 JSON', 'error'); return
+            }
           }
           const payload = { name: form.name, description: form.description, definition: def, enabled: form.enabled }
           if (editingId.value) {
@@ -120,7 +148,8 @@
 
       return {
         list, total, page, pageSize, keyword, loading, columns,
-        showForm, editingId, form, isAdmin, showRun, runWorkflow, runInputs, runResult,
+        showForm, editingId, form, isAdmin, editorMode, wfContainer, wfPalette,
+        showRun, runWorkflow, runInputs, runResult,
         loadList, openCreate, openEdit, submitForm, removeRow, toggleEnabled,
         openRun, executeRun, onPageChange, onSearch, state
       }
@@ -158,8 +187,8 @@
           <pagination :page="page" :page-size="pageSize" :total="total" @change="onPageChange" />
         </base-card>
 
-        <!-- 创建/编辑 -->
-        <base-modal v-model="showForm" :title="editingId ? '编辑工作流' : '新建工作流'" width="max-w-3xl">
+        <!-- 创建/编辑（可视化 Drawflow + JSON 双模式） -->
+        <base-modal v-model="showForm" :title="editingId ? '编辑工作流' : '新建工作流'" width="max-w-5xl">
           <div class="space-y-4">
             <div class="grid grid-cols-2 gap-4">
               <div>
@@ -179,9 +208,21 @@
               <textarea id="wf-desc" v-model="form.description" class="textarea" rows="2"></textarea>
             </div>
             <div>
-              <label for="wf-def" class="block text-sm font-medium text-ink mb-1">DAG 定义 (JSON)</label>
-              <textarea id="wf-def" v-model="form.definition" class="textarea font-mono text-xs" rows="14"></textarea>
-              <p class="mt-1 text-xs text-ink-subtle">格式：{ "nodes": [...], "edges": [...], "variables": [...] }</p>
+              <div class="flex items-center justify-between mb-2">
+                <label class="block text-sm font-medium text-ink">DAG 定义</label>
+                <div class="flex gap-1">
+                  <button type="button" :class="['btn text-xs', editorMode==='visual'?'btn-primary':'btn-secondary']" @click="editorMode='visual'">🎨 可视化</button>
+                  <button type="button" :class="['btn text-xs', editorMode==='json'?'btn-primary':'btn-secondary']" @click="editorMode='json'">{ } JSON</button>
+                </div>
+              </div>
+              <!-- 可视化模式：左侧节点面板 + 右侧 Drawflow 画布 -->
+              <div v-if="editorMode==='visual'" class="flex gap-2">
+                <div ref="wfPalette" class="w-36 bg-surface-muted p-2 rounded border border-border max-h-[420px] overflow-y-auto space-y-1" aria-label="节点面板"></div>
+                <div ref="wfContainer" class="flex-1 h-[420px] border border-border rounded overflow-hidden bg-surface" aria-label="DAG 画布"></div>
+              </div>
+              <!-- JSON 模式：textarea -->
+              <textarea v-else v-model="form.definition" class="textarea font-mono text-xs" rows="14" aria-label="DAG JSON"></textarea>
+              <p class="mt-1 text-xs text-ink-subtle">节点类型：start/end/skill_call/llm_call/condition/send_message/hitl/parallel/agent_call/sub_workflow</p>
             </div>
           </div>
           <template #footer>

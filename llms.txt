@@ -121,7 +121,16 @@ status枚举: pending/planning/executing/waiting_confirm/completed/failed
 
 ### GET /api/v1/agent/tasks/{task_id}/stream - 任务流式订阅 | JWT
 Response: `text/event-stream` (SSE)
-Events: `step_started`, `step_completed`, `tool_call`, `human_confirm_required`, `final_result`, `error`
+Events:
+- `step_started` `{step:string}` — 节点开始执行（intent/planning/execute_N）
+- `step_completed` `{step:string, result?:object}` — 节点执行完成
+- `tool_call` `{tool:string, args:string, status:"started"|"completed"|"failed", result?:object, error?:string}` — 工具调用实时状态（Phase C1 补齐，前端实时显示工具调用过程）
+- `human_confirm_required` `{step:integer, tool:string, input?:object}` — 需要人工确认（HITL）
+- `final_result` `{content:string, answer?:string, usage?:object}` — 最终回复
+- `error` `{code?:string, message:string}` — 错误事件
+- `intent_completed` / `planning_completed` / `reflected` / `hitl_paused` — 流程中间态事件
+- `token` `{delta:string}` — 流式 token（planner/executor 节点 LLM 调用时）
+- `cancelled` / `stream_end` — 终止事件
 
 ### POST /api/v1/agent/tasks/{task_id}/confirm - 人工确认 | JWT
 Body: `{decision*:string="approve"|"reject"|"modify", modifications?:object}`
