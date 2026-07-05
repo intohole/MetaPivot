@@ -30,8 +30,8 @@ class Settings(BaseSettings):
     # 部署规模（资源可伸缩）— 小企业可用 sqlite/memory/local，零外部依赖
     db_backend: Literal["sqlite", "postgresql"] = "postgresql"
     cache_backend: Literal["memory", "redis"] = "redis"
-    vector_backend: Literal["local", "milvus"] = "local"
-    memory_backend: Literal["memory", "db"] = "db"
+    vector_backend: Literal["local", "milvus", "chroma"] = "local"
+    memory_backend: Literal["memory", "db", "semantic"] = "db"
     scheduler_backend: Literal["async", "celery"] = "async"
     sqlite_path: str = "data/metapivot.db"
 
@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     llm_timeout: int = 60
     llm_max_steps: int = 10
     llm_temperature: float = 0.3
+    # embedding 模型（semantic memory / RAG 用，各 provider 模型名不同）
+    # - OpenAI: text-embedding-3-small / text-embedding-ada-002
+    # - Kimi: text-embedding-v1（部分账号支持）
+    # - Qwen: text-embedding-v2 / text-embedding-v3
+    # 留空时用 ILLMProvider.embed 默认值（text-embedding-v3）
+    llm_embed_model: str = ""
 
     # PostgreSQL（db_backend=postgresql 时使用）
     postgres_host: str = "localhost"
@@ -61,6 +67,17 @@ class Settings(BaseSettings):
     milvus_host: str = "localhost"
     milvus_port: int = 19530
     milvus_collection: str = "knowledge_chunks"
+
+    # Chroma（vector_backend=chroma 或 memory_backend=semantic 时使用）
+    # - 留空 chroma_host 时用 PersistentClient 本地持久化（单机/小企业，零外部服务依赖）
+    # - 配置 chroma_host 时用 HttpClient 远程服务（多实例共享）
+    chroma_host: str = ""
+    chroma_port: int = 8001
+    chroma_path: str = "data/chroma"
+    # 语义记忆 collection 名（memory_backend=semantic 时存消息 embedding）
+    chroma_memory_collection: str = "agent_memory"
+    # 语义记忆触发事实抽取的消息间隔（Mem0 风格 consolidate，每 N 条触发一次）
+    memory_consolidate_interval: int = 10
 
     # 钉钉
     dingtalk_client_id: str = ""

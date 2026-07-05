@@ -83,3 +83,22 @@ class InMemoryMemoryStore:
     async def health(self) -> bool:
         """健康检查（进程内存储始终健康）"""
         return True
+
+    # ============ 语义记忆扩展（进程内无 embedding 能力，默认 no-op）============
+
+    async def append_with_embedding(
+        self, chat_id: str, role: str, content: str,
+        metadata: Optional[dict] = None,
+    ) -> None:
+        """进程内无 embedding 能力，降级为 append_message（仅存 episodic）"""
+        await self.append_message(chat_id, role, content, metadata)
+
+    async def search_semantic(
+        self, query: str, chat_id: Optional[str] = None, top_k: int = 5,
+    ) -> list[dict]:
+        """进程内无语义检索能力，返回空列表（不补充语义记忆）"""
+        return []
+
+    async def consolidate_memories(self, chat_id: str) -> None:
+        """进程内无事实抽取能力，no-op"""
+        return None

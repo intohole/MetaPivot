@@ -140,10 +140,15 @@ class LLMProvider:
             log.error("LLM stream failed: {}", e)
             raise
 
-    async def embed(self, text: str, model: str = "text-embedding-v3") -> list[float]:
-        """文本向量化（RAG用）"""
+    async def embed(self, text: str, model: str = "") -> list[float]:
+        """文本向量化（semantic memory / RAG 用）
+
+        model 留空时用 settings.llm_embed_model；仍为空时降级为 text-embedding-v3。
+        各 provider embedding 模型名不同，需在 .env 配置 LLM_EMBED_MODEL。
+        """
         try:
-            response = await self.client.embeddings.create(model=model, input=text)
+            embed_model = model or settings.llm_embed_model or "text-embedding-v3"
+            response = await self.client.embeddings.create(model=embed_model, input=text)
             return response.data[0].embedding
         except Exception as e:
             log.error("LLM embed failed: {}", e)

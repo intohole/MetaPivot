@@ -136,6 +136,18 @@ class AgentService:
         if chat_id and self._memory_store is not None:
             try:
                 history_messages = await self._memory_store.load_history(chat_id, limit=20)
+                # 语义记忆补充：跨会话语义召回相关事实/消息（memory_backend=semantic 时生效）
+                # 用户问"我有什么偏好"时，从 agent_memory collection 召回相关事实注入上下文
+                if settings.memory_backend == "semantic" and message:
+                    semantic_hits = await self._memory_store.search_semantic(
+                        message, chat_id, top_k=5,
+                    )
+                    if semantic_hits:
+                        semantic_ctx = self._format_semantic_context(semantic_hits)
+                        # 语义召回作为 system 消息前置注入（不污染 user/assistant 交替结构）
+                        history_messages = (
+                            [{"role": "system", "content": semantic_ctx}] + history_messages
+                        )
             except Exception as e:
                 log.warning("load_history failed for {}: {}", chat_id, e)
 
@@ -232,15 +244,57 @@ class AgentService:
     async def _persist_to_memory(
         self, chat_id: str, user_message: str, assistant_answer: str
     ) -> None:
-        """持久化本轮对话到记忆存储（user + assistant 消息）"""
+        """持久化本轮对话到记忆存储（user + assistant 消息）
+
+        memory_backend=semantic 时用 append_with_embedding（双写 DB + 向量），
+        非 semantic 后端 append_with_embedding 降级为 append_message（no-op fallback）。
+        """
         if not chat_id or not self._memory_store or not user_message:
             return
         try:
-            await self._memory_store.append_message(chat_id, "user", user_message)
+            await self._memory_store.append_with_embedding(chat_id, "user", user_message)
             if assistant_answer:
-                await self._memory_store.append_message(chat_id, "assistant", assistant_answer)
+                await self._memory_store.append_with_embedding(
+                    chat_id, "assistant", assistant_answer
+                )
+            # 语义记忆事实抽取（fire-and-forget，每 N 条消息触发一次）
+            if (
+                settings.memory_backend == "semantic"
+                and settings.memory_consolidate_interval > 0
+            ):
+                asyncio.create_task(self._maybe_consolidate(chat_id))
         except Exception as e:
             log.warning("persist_to_memory failed for {}: {}", chat_id, e)
+
+    @staticmethod
+    def _format_semantic_context(hits: list[dict]) -> str:
+        """将语义召回结果格式化为 system 消息（注入对话历史前置）"""
+        lines = ["【相关记忆（语义召回，仅供参考）】"]
+        for h in hits[:5]:
+            role = h.get("role", "")
+            content = h.get("content", "")
+            score = h.get("score", 0.0)
+            meta = h.get("metadata", {}) or {}
+            # 事实型记忆优先展示（type=fact 是 consolidate 抽取的长期记忆）
+            tag = "[事实]" if meta.get("type") == "fact" else f"[{role}]" if role else ""
+            lines.append(f"- {tag} {content}（相似度 {score:.2f}）")
+        return "\n".join(lines)
+
+    async def _maybe_consolidate(self, chat_id: str) -> None:
+        """按消息间隔触发事实抽取（fire-and-forget，不阻塞主链路）
+
+        每条消息追加后检查：消息数达 memory_consolidate_interval 整数倍时触发 consolidate_memories。
+        consolidate_memories 内部幂等（fact hash 去重），偶发重复触发无副作用。
+        """
+        try:
+            # 轻量查询当前消息数（limit=1 仅探测存在性，实际计数用大 limit）
+            recent = await self._memory_store.load_history(chat_id, limit=1000)
+            count = len(recent)
+            interval = settings.memory_consolidate_interval
+            if count > 0 and count % interval == 0:
+                await self._memory_store.consolidate_memories(chat_id)
+        except Exception as e:
+            log.warning("maybe_consolidate failed for {}: {}", chat_id, e)
 
     # ============ 查询 ============
 
@@ -250,6 +304,32 @@ class AgentService:
     ) -> tuple[list[dict], int]:
         """查询任务列表（user_id 为空时返回全部，admin 场景）"""
         return await list_agent_tasks(page, page_size, user_id, status)
+
+    async def search_memory(
+        self, query: str, chat_id: str = "", top_k: int = 5,
+    ) -> list[dict]:
+        """语义记忆检索（memory_backend=semantic 时返回向量召回结果）
+
+        非 semantic 后端返回空列表（无语义检索能力）。
+        """
+        if not self._memory_store or not query:
+            return []
+        try:
+            cid = chat_id or None
+            hits = await self._memory_store.search_semantic(query, cid, top_k)
+            # 过滤敏感字段，只返回展示所需
+            return [
+                {
+                    "role": h.get("role", ""),
+                    "content": h.get("content", ""),
+                    "score": round(h.get("score", 0.0), 3),
+                    "type": (h.get("metadata", {}) or {}).get("type", "message"),
+                }
+                for h in hits
+            ]
+        except Exception as e:
+            log.warning("search_memory failed query='{}' err={}", query[:30], e)
+            return []
 
     async def get_task(self, task_id: str, user_id: str = "") -> dict:
         """查询任务详情（含 steps；越权防护：仅任务发起人，admin 由路由层放行）"""

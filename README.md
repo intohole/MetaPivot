@@ -26,17 +26,18 @@ API 文档：http://localhost:8000/docs
 
 所有基础设施均已接口化，通过 `.env` 一行配置切换 backend，适配小企业到超大型企业：
 
-| 部署规模 | DB_BACKEND | CACHE_BACKEND | VECTOR_BACKEND | 外部依赖 | 适用场景 |
-|---------|-----------|--------------|----------------|---------|---------|
-| **小企业** | `sqlite` | `memory` | `local` | 零（仅 Python） | < 50 人团队，单机部署 |
-| **中型** | `postgresql` | `redis` | `local` | PostgreSQL + Redis | 多实例，共享会话 |
-| **超大型** | `postgresql` | `redis` | `milvus` | PostgreSQL + Redis + Milvus | 百万级知识库，高并发 |
+| 部署规模 | DB_BACKEND | CACHE_BACKEND | VECTOR_BACKEND | MEMORY_BACKEND | 外部依赖 | 适用场景 |
+|---------|-----------|--------------|----------------|----------------|---------|---------|
+| **小企业** | `sqlite` | `memory` | `local` | `db` | 零（仅 Python） | < 50 人团队，单机部署 |
+| **中型** | `postgresql` | `redis` | `chroma` | `semantic` | PostgreSQL + Redis + Chroma | 多实例，跨会话语义记忆 |
+| **超大型** | `postgresql` | `redis` | `milvus` | `semantic` | PostgreSQL + Redis + Milvus | 百万级知识库，高并发 |
 
 ```bash
-# .env 配置示例（小企业 → 中型，只需改 3 行）
+# .env 配置示例（小企业 → 中型，改 4 行即可升级语义记忆）
 DB_BACKEND=postgresql      # sqlite → postgresql
 CACHE_BACKEND=redis        # memory → redis
-VECTOR_BACKEND=milvus      # local → milvus（可选）
+VECTOR_BACKEND=chroma      # local → chroma（Chroma 本地持久化，零外部服务）
+MEMORY_BACKEND=semantic    # db → semantic（叠加向量记忆 + 事实抽取）
 ```
 
 ## 核心能力

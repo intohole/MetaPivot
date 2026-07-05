@@ -28,6 +28,13 @@ class ConfirmRequest(BaseModel):
     modifications: dict = Field(default_factory=dict, description="decision=modify时必填")
 
 
+class MemorySearchRequest(BaseModel):
+    """语义记忆检索请求（memory_backend=semantic 时生效）"""
+    query: str = Field(..., min_length=1, max_length=2000, description="检索 query")
+    chat_id: str = Field(default="", description="限定会话；留空跨所有会话语义检索")
+    top_k: int = Field(default=5, ge=1, le=20, description="返回条数")
+
+
 @router.post("/chat", status_code=202, summary="发起 Agent 对话")
 async def chat(
     body: ChatRequest,
@@ -115,3 +122,17 @@ async def cancel_task(
     """取消进行中的 Agent 任务"""
     from app.service.agent_service import agent_service
     return ok(await agent_service.cancel_task(task_id, user.user_id), request)
+
+
+@router.post("/memory/search", summary="语义记忆检索")
+async def search_memory(
+    body: MemorySearchRequest,
+    request: Request,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """跨会话语义记忆检索（memory_backend=semantic 时返回向量召回结果，其他 backend 返回空）
+
+    用于查询用户偏好/历史事实，如"用户喜欢什么主题"。
+    """
+    from app.service.agent_service import agent_service
+    return ok(await agent_service.search_memory(body.query, body.chat_id, body.top_k), request)

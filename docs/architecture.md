@@ -432,3 +432,63 @@ replier_node → final_result{answer,usage}
 - `POST /api/v1/schedules/dlq/{id}/cancel` 放弃任务
 
 判断任务是否真正结束应查 `finished_at` 非空（`status` 字段可能在循环中途被 `persist_state` 设为 `failed` 但任务还在执行）。
+
+### 十四、记忆子系统（Phase 6）
+
+#### IMemoryStore 契约（9 方法，分两层）
+
+**基础层（6 方法，所有 backend 实现）**：
+- `load_history(chat_id, limit)` / `append_message(...)` — episodic 顺序读写
+- `get_summary(chat_id)` / `set_summary(...)` — 长对话压缩摘要
+- `clear(chat_id)` / `health()` — GDPR 合规 / 健康检查
+
+**语义扩展层（3 方法，默认 no-op，仅 SemanticMemoryStore 实现）**：
+- `append_with_embedding(...)` — 存消息 + 计算 embedding 入向量库（双写）
+- `search_semantic(query, chat_id, top_k)` — 跨会话语义召回
+- `consolidate_memories(chat_id)` — Mem0 风格事实抽取
+
+> 设计：基础层方法在 InMemoryMemoryStore / DBMemoryStore 用默认 no-op 实现，
+> 保持 `isinstance(_, IMemoryStore)` 通过（`@runtime_checkable` Protocol 结构化校验）。
+
+#### 三种 backend 部署规模
+
+| MEMORY_BACKEND | 实现 | 向量库 | 适用场景 |
+|----------------|------|--------|---------|
+| `memory` | InMemoryMemoryStore | 无 | 开发环境，零依赖，重启丢失 |
+| `db` | DBMemoryStore | 无 | 生产环境，SQLite/PostgreSQL 持久化，仅 episodic 顺序读 |
+| `semantic` | SemanticMemoryStore | IVectorStore（chroma/local/milvus） | 跨会话语义关联 + 事实抽取 |
+
+#### SemanticMemoryStore 设计（episodic + semantic 双层）
+
+参考 LangMem 三类记忆模型 + Mem0 双阶段事实抽取：
+
+- **episodic（事件记忆）**：委托 DBMemoryStore 存原始消息（ChatMessageORM，顺序读）
+- **semantic（语义记忆）**：消息 embedding + 事实抽取，存 IVectorStore `agent_memory` collection
+  - `append_with_embedding`：双写 DB（原文）+ 向量库（embedding），单一数据源
+  - `search_semantic`：embed query → 向量检索 → 返回相关事实/消息（跨会话）
+  - `consolidate_memories`：LLM 从最近对话抽取事实三元组（省 90% token），带 `metadata.type="fact"`
+- **procedural（过程记忆）**：复用 episodic 顺序 + semantic 召回（暂不独立存储）
+
+#### Chroma 双角色
+
+Chroma 同时承担两个职责（`VECTOR_BACKEND=chroma` + `MEMORY_BACKEND=semantic`）：
+1. **IVectorStore backend（RAG）**：`knowledge_chunks` collection 存文档分块向量
+2. **IMemoryStore 语义扩展**：`agent_memory` collection 存消息 embedding + 事实
+
+collection 命名空间隔离，避免 RAG 与 memory 数据混淆：
+- `knowledge_chunks` — RAG 文档检索
+- `agent_memory` — 语义记忆（消息 + 事实）
+- `tool_index` — Phase 6 Tool RAG 工具索引
+
+#### 集成点（AgentService）
+
+- `_run_task` 加载历史时：先 `load_history`（episodic）+ 若 semantic backend 再 `search_semantic(message, chat_id)` 补充相关记忆，作为 system 消息前置注入
+- `_persist_to_memory`：semantic backend 用 `append_with_embedding`（双写），非 semantic 降级为 `append_message`
+- 会话结束触发 `_maybe_consolidate`（fire-and-forget，每 N 条消息触发一次事实抽取）
+- API：`POST /api/v1/agent/memory/search` 暴露语义记忆检索能力
+
+#### 容错与降级
+
+- LLM embed 失败：episodic 原文已存，semantic 向量失败 warning 不阻塞主链路
+- chromadb 未安装：factory 降级为 LocalVectorStore（开发环境零依赖）
+- 非 semantic backend 调用语义方法：返回 no-op（空列表 / 空操作），不报错

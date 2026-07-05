@@ -11,7 +11,7 @@
 """
 from typing import Optional
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -166,3 +166,25 @@ class DBMemoryStore:
         except Exception as e:
             log.warning("memory db health check failed: {}", e)
             return False
+
+    # ============ 语义记忆扩展（DB 后端无 embedding 能力，默认降级/空实现）============
+
+    async def append_with_embedding(
+        self, chat_id: str, role: str, content: str,
+        metadata: Optional[dict] = None,
+    ) -> None:
+        """DB 后端无 embedding 能力，降级为 append_message（仅存 episodic 原文）
+
+        semantic 后端（SemanticMemoryStore）会覆盖此方法，叠加向量入库。
+        """
+        await self.append_message(chat_id, role, content, metadata)
+
+    async def search_semantic(
+        self, query: str, chat_id: Optional[str] = None, top_k: int = 5,
+    ) -> list[dict]:
+        """DB 后端无语义检索能力，返回空列表（仅 episodic 顺序读，不补充语义记忆）"""
+        return []
+
+    async def consolidate_memories(self, chat_id: str) -> None:
+        """DB 后端无事实抽取能力，no-op（semantic 后端由 LLM 抽取事实）"""
+        return None

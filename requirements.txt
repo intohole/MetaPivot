@@ -23,6 +23,7 @@ aioredis==2.0.1
 
 # 向量库
 pymilvus==2.5.4
+chromadb==0.5.20  # ChromaDB（VECTOR_BACKEND=chroma / MEMORY_BACKEND=semantic 时使用）
 
 # LLM
 openai==1.59.3

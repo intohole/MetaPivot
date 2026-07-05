@@ -131,6 +131,11 @@ Body: `{decision*:string="approve"|"reject"|"modify", modifications?:object}`
 ### POST /api/v1/agent/tasks/{task_id}/cancel - 取消任务 | JWT
 200: `{task_id:string, status:string="cancelled"}`
 
+### POST /api/v1/agent/memory/search - 语义记忆检索 | JWT
+Body: `{query*:string, chat_id?:string="", top_k?:integer=5}`
+200: `[{role:string, content:string, score:number, type:string="message"|"fact"}]`
+注: 跨会话语义记忆检索（memory_backend=semantic 时返回向量召回结果，其他 backend 返回空数组）；type=fact 为 consolidate_memories 抽取的长期事实记忆，type=message 为原始对话消息
+
 ### GET /api/v1/agent/tasks/{task_id}/replay - 会话重放 | JWT
 200: `{task:object, events:array<{event_type:string, event_data:object, step_index:integer, created_at:string}>, langfuse_url:string}`
 注: 返回 Agent 任务事件流（step_started/llm_call/tool_call/step_completed 等），用于会话重放与调试；langfuse_url 为 Langfuse trace 链接（未启用时为空）
