@@ -109,7 +109,11 @@
       }
 
       const removeRow = async (row) => {
-        if (!confirm('确认删除工作流 "' + row.name + '"？')) return
+        const action = await state.confirmAction({
+          title: '确认删除', message: '确认删除工作流 "' + row.name + '"？此操作不可撤销。',
+          confirmText: '删除', danger: true
+        })
+        if (action !== 'confirm') return
         try { await window.API.del('/workflows/' + row.id); state.notify('已删除', 'success'); loadList() } catch (e) {}
       }
 

@@ -53,6 +53,11 @@
         { label: '上传知识文档', icon: '📚', path: '/knowledge' }
       ]
 
+      // Round 4: 新手引导（手动触发 + 首次访问自动触发）
+      const startTour = () => {
+        if (window.startTour) window.startTour()
+      }
+
       // 新手引导步骤（stats.tasks === 0 时显示）
       const onboardingSteps = [
         { step: 1, title: '配置 LLM API Key', desc: '在 .env 填入 LLM_API_KEY（支持 Kimi/Qwen/GLM）', path: '/configs' },
@@ -62,9 +67,15 @@
       ]
       const showOnboarding = computed(() => !loading.value && stats.value.tasks === 0)
 
-      onMounted(loadDashboard)
+      onMounted(async () => {
+        await loadDashboard()
+        // Round 4: 首次访问且无任务时，延迟 800ms 自动触发新手引导（等数据加载完）
+        if (!localStorage.getItem('metapivot_tour_done') && stats.value.tasks === 0) {
+          setTimeout(() => { if (window.startTour) window.startTour() }, 800)
+        }
+      })
 
-      return { stats, statCards, recentTasks, loading, quickActions, onboardingSteps, showOnboarding, state, loadDashboard }
+      return { stats, statCards, recentTasks, loading, quickActions, onboardingSteps, showOnboarding, startTour, state, loadDashboard }
     },
     template: `
       <div class="space-y-6">
@@ -99,7 +110,10 @@
         </base-card>
 
         <!-- 快捷操作 -->
-        <base-card title="快捷操作">
+        <base-card title="快捷操作" data-tour="quick-actions">
+          <template #action>
+            <button class="btn btn-secondary text-sm" @click="startTour" aria-label="启动新手引导">🎓 新手引导</button>
+          </template>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <button v-for="a in quickActions" :key="a.path"
                     @click="state.navigate(a.path)"
@@ -115,7 +129,8 @@
           <template #action>
             <button class="btn btn-secondary text-sm" @click="state.navigate('/agent')">查看全部 →</button>
           </template>
-          <base-table :columns="[
+          <table-skeleton v-if="loading" :rows="5" :cols="3" />
+          <base-table v-else :columns="[
             { key: 'task_id', label: '任务ID', width: '180px' },
             { key: 'status', label: '状态', width: '120px' },
             { key: 'created_at', label: '创建时间', width: '180px' }

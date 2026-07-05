@@ -1,6 +1,7 @@
 /* ============================================================
    应用主入口 — Vue 应用 + 布局 + 路由
    页面组件在各自文件中注册到 window.Pages，本文件最后加载
+   Round 4: 主题切换按钮 + 全局 ConfirmDialog 挂载 + Skeleton 注册
    ============================================================ */
 (function () {
   const { createApp, computed, defineComponent, watch, ref } = Vue
@@ -52,7 +53,13 @@
       watch(state.currentRoute, guardRoute, { immediate: true })
       const sidebarOpen = ref(true)
       const toggleSidebar = () => { sidebarOpen.value = !sidebarOpen.value }
-      const handleLogout = () => { if (confirm('确认退出登录？')) state.logout() }
+      // Round 4: handleLogout 改用全局 confirmAction 替代原生 confirm()
+      const handleLogout = async () => {
+        const action = await state.confirmAction({
+          title: '退出登录', message: '确认退出登录？', confirmText: '退出', danger: true
+        })
+        if (action === 'confirm') state.logout()
+      }
       return { state, currentRoute, visibleNav, sidebarOpen, toggleSidebar, handleLogout }
     },
     template: `
@@ -64,7 +71,7 @@
 
         <div v-else class="flex min-h-screen">
           <aside :class="['bg-surface border-r border-border transition-all duration-200 flex flex-col', sidebarOpen ? 'w-60' : 'w-0 overflow-hidden']"
-                 aria-label="主导航">
+                 aria-label="主导航" data-tour="sidebar">
             <div class="flex items-center gap-2 px-5 h-16 border-b border-border">
               <span class="text-2xl" aria-hidden="true">🤖</span>
               <span class="font-bold text-ink">MetaPivot</span>
@@ -91,7 +98,7 @@
           </aside>
 
           <div class="flex-1 flex flex-col min-w-0">
-            <header class="bg-surface border-b border-border h-16 flex items-center justify-between px-6 sticky top-0 z-30">
+            <header class="bg-surface border-b border-border h-16 flex items-center justify-between px-6 sticky top-0 z-30" data-tour="header">
               <div class="flex items-center gap-3">
                 <button @click="toggleSidebar" class="btn btn-ghost p-2" :aria-label="sidebarOpen ? '收起侧边栏' : '展开侧边栏'" :aria-expanded="sidebarOpen">
                   <span aria-hidden="true">☰</span>
@@ -99,6 +106,9 @@
                 <h1 class="text-base font-semibold text-ink">{{ currentRoute.label }}</h1>
               </div>
               <div class="flex items-center gap-2 text-sm text-ink-muted">
+                <button class="btn btn-ghost p-2" @click="state.toggleTheme" :aria-label="state.theme.value === 'light' ? '切换暗色模式' : '切换亮色模式'" title="切换主题">
+                  <span aria-hidden="true">{{ state.theme.value === 'light' ? '🌙' : '☀️' }}</span>
+                </button>
                 <span class="badge badge-success"><span class="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true"></span>系统正常</span>
               </div>
             </header>
@@ -108,6 +118,9 @@
             </main>
           </div>
         </div>
+
+        <!-- Round 4: 全局 ConfirmDialog（业务页面调 state.confirmAction） -->
+        <confirm-dialog :model-value="state.confirmState.visible" :title="state.confirmState.title" :message="state.confirmState.message" :confirm-text="state.confirmState.confirmText" :danger="state.confirmState.danger" @update:model-value="v => { if (!v) state.resolveConfirm('cancel') }" @confirm="state.resolveConfirm('confirm')" @cancel="state.resolveConfirm('cancel')" />
       </div>
     `
   })
@@ -125,6 +138,8 @@
   app.component('BaseModal', C.BaseModal)
   app.component('ConfirmDialog', C.ConfirmDialog)
   app.component('FormField', C.FormField)
+  app.component('Skeleton', C.Skeleton)
+  app.component('TableSkeleton', C.TableSkeleton)
 
   // 注册页面组件（pages/*.js 已先于本文件执行，挂载到 window.Pages）
   const P = window.Pages || {}

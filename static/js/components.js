@@ -231,5 +231,40 @@
     `
   }
 
+  /* --- Round 4: Skeleton 骨架屏（加载态优化，替代"加载中..."文本） --- */
+  Components.Skeleton = {
+    props: {
+      lines: { type: Number, default: 3 },
+      height: { type: String, default: 'h-4' },
+      avatar: { type: Boolean, default: false }
+    },
+    template: `
+      <div class="space-y-3 animate-pulse" role="status" aria-label="加载中">
+        <div v-if="avatar" class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-full bg-surface-muted"></div>
+          <div class="flex-1 space-y-2">
+            <div class="h-3 bg-surface-muted rounded w-1/4"></div>
+            <div class="h-3 bg-surface-muted rounded w-1/2"></div>
+          </div>
+        </div>
+        <div v-for="i in lines" :key="i" :class="['bg-surface-muted rounded', height]"></div>
+        <span class="sr-only">加载中...</span>
+      </div>
+    `
+  }
+
+  /* --- Round 4: 表格骨架屏（行/列骨架） --- */
+  Components.TableSkeleton = {
+    props: { rows: { type: Number, default: 5 }, cols: { type: Number, default: 4 } },
+    template: `
+      <div class="animate-pulse" role="status" aria-label="表格加载中">
+        <div v-for="r in rows" :key="r" class="flex gap-4 py-3 border-b border-border">
+          <div v-for="c in cols" :key="c" class="flex-1 h-4 bg-surface-muted rounded"></div>
+        </div>
+        <span class="sr-only">加载中...</span>
+      </div>
+    `
+  }
+
   window.Components = Components
 })()

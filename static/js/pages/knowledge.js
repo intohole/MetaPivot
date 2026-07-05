@@ -68,7 +68,11 @@
       }
 
       const removeRow = async (row) => {
-        if (!confirm('确认删除文档 "' + row.filename + '"？')) return
+        const action = await state.confirmAction({
+          title: '确认删除', message: '确认删除文档 "' + row.filename + '"？此操作不可撤销。',
+          confirmText: '删除', danger: true
+        })
+        if (action !== 'confirm') return
         try {
           await window.API.del('/knowledge/documents/' + row.id)
           state.notify('已删除', 'success')

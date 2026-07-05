@@ -1,6 +1,8 @@
 /* ============================================================
    全局状态管理 — 挂载到 window.AppState
    所有跨组件共享状态都通过此对象访问
+   - 用户/路由/Toast/加载态
+   - Round 4: theme 暗色模式 + confirmAction 全局确认对话框
    ============================================================ */
 (function () {
   const { ref, reactive, computed } = Vue
@@ -16,6 +18,37 @@
 
   // 路由状态：hash 路由 #/page
   const currentRoute = ref(window.location.hash.slice(1) || '/dashboard')
+
+  // Round 4: 主题状态（light/dark），localStorage 持久化
+  const theme = ref(localStorage.getItem('metapivot_theme') || 'light')
+  function toggleTheme() {
+    theme.value = theme.value === 'light' ? 'dark' : 'light'
+    localStorage.setItem('metapivot_theme', theme.value)
+    document.documentElement.dataset.theme = theme.value
+  }
+  // 启动时同步到 documentElement（避免 FOUC 闪烁）
+  document.documentElement.dataset.theme = theme.value
+
+  // Round 4: 全局确认对话框状态（替代原生 confirm()）
+  const confirmState = reactive({
+    visible: false, title: '确认操作', message: '', confirmText: '确认', danger: false, resolve: null
+  })
+  function confirmAction(opts) {
+    return new Promise((resolve) => {
+      confirmState.visible = true
+      confirmState.title = opts.title || '确认操作'
+      confirmState.message = opts.message || ''
+      confirmState.confirmText = opts.confirmText || '确认'
+      confirmState.danger = opts.danger || false
+      confirmState.resolve = resolve
+    })
+  }
+  function resolveConfirm(action) {
+    const resolve = confirmState.resolve
+    confirmState.visible = false
+    confirmState.resolve = null
+    if (resolve) resolve(action)
+  }
 
   // 从 localStorage 恢复登录态
   function restoreAuth() {
@@ -86,6 +119,8 @@
   // 暴露到 window，确保跨文件可访问
   window.AppState = {
     user, loading, loadingCount, toasts, currentRoute,
+    theme, toggleTheme,
+    confirmState, confirmAction, resolveConfirm,
     setAuth, logout, restoreAuth,
     notify, dismissToast,
     navigate, hasRole,
