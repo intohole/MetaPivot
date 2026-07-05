@@ -89,3 +89,85 @@ def _format_tools_for_plan(tools: list[dict]) -> str:
         desc = func.get("description", "")[:60]
         lines.append(f"- {name}: {desc}")
     return "\n".join(lines) if lines else "（无工具）"
+
+
+# ============ Phase B1: Re-planning ============
+
+_MAX_REVISIONS = 2  # 防 re-planning 震荡
+
+
+async def update_plan(state: AgentState, llm_provider: object, reason: str = "") -> list[dict]:
+    """Phase B1: 动态更新计划（Re-planning）
+
+    触发条件：reflector 输出 REPLAN，或 graph 检测到 plan 偏差大
+
+    Args:
+        state: Agent 状态（含已完成 steps + 剩余 plan + reflection_hint）
+        llm_provider: LLM Provider 实例
+        reason: re-plan 原因（来自 reflector）
+
+    Returns:
+        新的计划列表；超过 max_revisions 返回空列表（强制走 executor auto）
+    """
+    if state.plan_revision_count >= _MAX_REVISIONS:
+        log.warning("Re-plan limit reached ({}), fallback to executor auto", _MAX_REVISIONS)
+        return []
+
+    if not state.available_tools:
+        return []
+
+    from app.domain.agent.prompts import REPLAN_PROMPT
+
+    completed_summary = _summarize_completed_steps(state.steps)
+    remaining_plan = state.plan[state.current_step:] if state.current_step < len(state.plan) else []
+    tools_desc = _format_tools_for_plan(state.available_tools)
+    prompt = REPLAN_PROMPT.format(
+        message=state.original_message,
+        tools_desc=tools_desc,
+        completed=completed_summary,
+        remaining_plan=json.dumps(remaining_plan, ensure_ascii=False),
+        reason=reason,
+    )
+
+    try:
+        result = await llm_provider.chat_completion(
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            max_tokens=300,
+        )
+        content = result.get("content", "").strip()
+        parsed = json.loads(content)
+        plan = parsed.get("plan", [])
+        if not isinstance(plan, list):
+            return []
+        validated: list[dict] = []
+        for item in plan[:5]:
+            if isinstance(item, dict) and "tool" in item:
+                validated.append({
+                    "step": item.get("step", len(validated) + 1),
+                    "tool": str(item.get("tool", ""))[:64],
+                    "purpose": str(item.get("purpose", ""))[:50],
+                })
+        state.plan_revision_count += 1
+        log.info("Plan revised: {} steps (revision #{})", len(validated), state.plan_revision_count)
+        state.add_event("plan_revised", {
+            "reason": reason, "new_steps": len(validated),
+            "revision": state.plan_revision_count,
+        })
+        return validated
+    except Exception as e:
+        log.warning("update_plan failed: {}", e)
+        return []
+
+
+def _summarize_completed_steps(steps: list) -> str:
+    """摘要已完成的步骤（供 re-plan prompt 用）"""
+    if not steps:
+        return "（无已完成步骤）"
+    lines = []
+    for s in steps[-5:]:  # 最近 5 步
+        status = s.status or "unknown"
+        tool = s.tool_name or "?"
+        lines.append(f"- step {s.step_index}: {tool} ({status})")
+    return "\n".join(lines)

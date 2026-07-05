@@ -151,6 +151,28 @@ class AgentService:
             except Exception as e:
                 log.warning("load_history failed for {}: {}", chat_id, e)
 
+        # Phase B4: Context Summarization - 长对话压缩（len>=20 触发，对齐 LangMem/Mem0）
+        # 已有摘要时跳过（避免重复压缩），仅首次超过阈值时生成并持久化到 memory_store.set_summary
+        if (
+            history_messages
+            and len(history_messages) >= 20
+            and self._memory_store
+            and chat_id
+        ):
+            try:
+                existing_summary = await self._memory_store.get_summary(chat_id)
+                if not existing_summary:
+                    from app.domain.agent.context_window import summarize_messages
+                    from app.infra.llm.provider import get_llm
+                    summary = await summarize_messages(
+                        history_messages, get_llm(),
+                        memory_store=self._memory_store, chat_id=chat_id,
+                    )
+                    if summary:
+                        log.info("Context summarized for {}: {} chars", chat_id, len(summary))
+            except Exception as e:
+                log.warning("Context summarization failed for {}: {}", chat_id, e)
+
         state = AgentState(
             task_id=task_id, user_id=user_id, channel=channel, chat_id=chat_id,
             original_message=message, context=context, max_steps=settings.llm_max_steps,

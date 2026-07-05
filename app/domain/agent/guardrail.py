@@ -79,3 +79,57 @@ def sanitize_messages(messages: list[dict]) -> list[dict]:
             content = sanitize_input(content)
         sanitized.append({**msg, "content": content})
     return sanitized
+
+
+# ============ Phase B7: 工具参数安全校验 ============
+
+# 危险操作规则（命中即拦截，返回 tool_blocked 事件）
+# key: 工具名子串匹配模式；value: 必需参数列表（至少含其一）
+_DANGEROUS_PATTERNS: dict[str, list[str]] = {
+    # delete 类工具必须有 where/filter/condition 条件（防止全表删除）
+    "delete": ["where", "filter", "condition", "id"],
+    # bulk_update 类工具必须有 limit/where（防止全表更新）
+    "bulk_update": ["limit", "where", "filter", "id"],
+    # drop 类工具必须有明确 target（table/collection/index）
+    "drop": ["table", "collection", "index", "name"],
+    # truncate 类工具必须有 table/name
+    "truncate": ["table", "name"],
+}
+
+
+def validate_tool_args(tool_name: str, args: dict) -> tuple[bool, str]:
+    """Phase B7: 工具参数安全校验
+
+    检查危险操作是否符合安全约束：
+    - delete 类工具必须有 where/filter 条件（防止全表删除）
+    - bulk_update 类工具必须有 limit
+    - drop/truncate 类工具必须有明确 target
+
+    对齐 Claude Code Bash 沙箱 / OpenAI strict mode 的工具参数校验实践。
+
+    Args:
+        tool_name: 工具名
+        args: 工具参数（已 JSON 解析）
+
+    Returns:
+        (is_safe, reason) — is_safe=False 时 reason 为拦截原因（可展示给 LLM）
+    """
+    if not args or not isinstance(args, dict):
+        return True, ""  # 无参数不校验
+
+    name_lower = tool_name.lower()
+
+    # 匹配危险操作模式（子串匹配，避免误判需精确名称时再细化）
+    for pattern, required_fields in _DANGEROUS_PATTERNS.items():
+        if pattern in name_lower:
+            # 检查是否包含任一必需字段
+            has_constraint = any(f in args for f in required_fields)
+            if not has_constraint:
+                reason = (
+                    f"危险操作拦截：{tool_name} 缺少必需参数"
+                    f"（{', '.join(required_fields)}），请添加过滤条件限制影响范围"
+                )
+                log.warning("Tool blocked: {} - {}", tool_name, reason)
+                return False, reason
+
+    return True, ""

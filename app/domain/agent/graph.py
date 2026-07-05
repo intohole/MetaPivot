@@ -80,6 +80,22 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
                 for ev in _drain_events(state):
                     yield ev
                 yield _event("reflected", {"status": state.status.value})
+                # Phase B1: 检测 re-plan 标记（reflector 输出 REPLAN 时设置）
+                if state.context.get("need_replan"):
+                    state.context["need_replan"] = False  # 消费标记
+                    try:
+                        from app.domain.agent.planner import update_plan, format_plan_as_context
+                        from app.domain.agent.prompts import SYSTEM_PROMPT
+                        from app.infra.llm.provider import get_llm
+                        replan_reason = state.context.get("replan_reason", "")
+                        new_plan = await update_plan(state, get_llm(), replan_reason)
+                        if new_plan:
+                            state.plan = new_plan
+                            # 更新 system prompt 中的 plan context
+                            if state.messages and state.messages[0].get("role") == "system":
+                                state.messages[0]["content"] = SYSTEM_PROMPT + format_plan_as_context(new_plan)
+                    except Exception as e:
+                        log.warning("Re-plan failed, fallback to executor auto: {}", e)
                 if state.status == AgentStatus.COMPLETED:
                     break
                 if state.status != AgentStatus.EXECUTING:

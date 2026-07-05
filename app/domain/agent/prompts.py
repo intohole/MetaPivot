@@ -3,6 +3,7 @@
 将 system/intent/plan/reflect 提示词从 nodes.py 抽离，便于维护和 A/B 测试。
 遵循：节点逻辑（nodes.py）+ 提示词（prompts.py）分离原则。
 """
+import json
 
 # ============ 系统提示词 ============
 SYSTEM_PROMPT = """你是企业内部办公助手 MetaPivot，帮助员工高效完成工作。
@@ -26,10 +27,30 @@ INTENT_PROMPT = """分析用户请求，判断执行模式。
 可用工具列表：
 {tools_desc}
 
+示例（few-shot，输出仅 JSON）：
+用户请求："你好"
+输出：{{"mode": "pipeline", "intent": "问候", "confidence": 0.95}}
+
+用户请求："查询订单 ORD-12345 的状态"
+输出：{{"mode": "agent", "intent": "查订单状态", "confidence": 0.9}}
+
+用户请求："走报销审批流程"
+输出：{{"mode": "workflow", "intent": "报销审批", "confidence": 0.85}}
+
 用户请求：{message}
 
 请输出 JSON（仅 JSON，无其他文字）：
 {{"mode": "pipeline|agent|workflow", "intent": "意图简述（10字内）", "confidence": 0.0-1.0}}"""
+
+# ============ 执行阶段提示词（Phase B6，预留扩展点）============
+EXECUTE_PROMPT = """执行阶段提示：当前处于 Agent 执行循环，请基于工具调用结果决定下一步。
+
+要点：
+1. 若工具结果足够回答用户，直接给出最终答案（不调用工具）
+2. 若信息不完整，调用合适的工具补充
+3. 若连续失败，考虑换工具或调用 finish 收尾
+4. 接近步数上限时，主动调用 finish 工具收尾
+5. 若有【反思修正建议】，参考建议选择下一步工具"""
 
 # ============ 反思提示词 ============
 REFLECT_PROMPT = """评估当前工具调用结果是否足以回答用户问题。
@@ -42,8 +63,13 @@ REFLECT_PROMPT = """评估当前工具调用结果是否足以回答用户问题
 - "complete": 工具结果已足够回答用户问题
 - "continue": 需要更多工具调用（如信息不完整）
 - "give_up": 无法完成（工具失败且无替代方案）
+- "replan": 当前计划偏差大，需要重新规划（如工具不存在、方向错误）
 
-输出 JSON：{{"decision": "complete|continue|give_up", "reason": "原因（20字内）"}}"""
+若 decision 为 continue 或 replan，可输出 hint 字段提供修正建议：
+- next_tool_hint: 建议下一步使用的工具名
+- why: 建议原因（如"原工具连续失败，应换知识库检索"）
+
+输出 JSON：{{"decision": "complete|continue|give_up|replan", "reason": "原因（20字内）", "hint": {{"next_tool_hint": "工具名", "why": "原因"}}}}"""
 
 # ============ 规划提示词 ============
 PLAN_PROMPT = """分析用户请求，制定执行计划。
@@ -59,11 +85,40 @@ PLAN_PROMPT = """分析用户请求，制定执行计划。
 3. 给出该步骤的目的（10 字内）
 4. 若任务简单可直接回答，输出空列表
 
+示例：
+用户请求："查询订单状态并通知用户"
+输出：{{"plan": [{{"step": 1, "tool": "query_order", "purpose": "查订单"}}, {{"step": 2, "tool": "send_message", "purpose": "通知用户"}}]}}
+
 输出 JSON（仅 JSON）：
 {{"plan": [
   {{"step": 1, "tool": "工具名", "purpose": "目的"}},
   ...
 ]}}"""
+
+# ============ Re-planning 提示词（Phase B1）============
+REPLAN_PROMPT = """当前计划偏差大，需要重新规划。
+
+用户请求：{message}
+
+可用工具：
+{tools_desc}
+
+已完成步骤：
+{completed}
+
+剩余计划（可能已失效）：
+{remaining_plan}
+
+Re-plan 原因：{reason}
+
+要求：
+1. 基于已完成步骤的结果，重新制定剩余步骤（不要重复已完成的步骤）
+2. 每个步骤标注工具名（来自可用工具列表）
+3. 给出该步骤的目的（10 字内）
+4. 输出 1-5 个步骤
+
+输出 JSON（仅 JSON）：
+{{"plan": [{{"step": 1, "tool": "工具名", "purpose": "目的"}}]}}"""
 
 # ============ 定时任务解析提示词 ============
 SCHEDULE_PARSE_PROMPT = """从用户消息中解析定时任务信息。
@@ -112,6 +167,9 @@ def build_system_prompt(state) -> str:
     将当前已用步数/token 注入 system prompt，使 LLM 对资源预算可见，
     在接近上限时主动调用 finish 工具收尾（避免硬性截断）。
 
+    Phase B3: 注入反思修正建议（reflector 输出 hint，executor 用以纠正方向），
+    hint 存于 state.context["reflection_hint"]，对齐 Claude Code 反思-修正闭环。
+
     Args:
         state: AgentState 实例
 
@@ -124,4 +182,10 @@ def build_system_prompt(state) -> str:
         f"- Token 累计: {state.total_tokens}\n"
         f"当步数接近上限时，请调用 finish 工具主动收尾，输出当前已获得的信息摘要。"
     )
-    return SYSTEM_PROMPT + budget
+    prompt = SYSTEM_PROMPT + budget
+    # Phase B3: 注入反思修正建议（reflector 输出 hint，executor 用以纠正方向）
+    hint = state.context.get("reflection_hint") if state.context else None
+    if hint:
+        hint_text = json.dumps(hint, ensure_ascii=False)
+        prompt += f"\n\n【反思修正建议】{hint_text}"
+    return prompt

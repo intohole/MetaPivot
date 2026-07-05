@@ -20,7 +20,7 @@
 - 纯函数（除 summarize 外），无副作用
 - 显式注入 token_counter 依赖（便于测试替换）
 """
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from app.utils.logger import get_logger
 
@@ -139,16 +139,23 @@ async def summarize_messages(
     messages: list[dict],
     llm: "ILLMProvider",
     max_messages: int = 20,
+    memory_store: Any = None,
+    chat_id: str = "",
 ) -> str:
     """用 LLM 压缩消息列表为摘要
 
     长对话场景：超过 max_messages 时把较早的消息压缩为摘要，
     避免无限增长。摘要可存储到 ChatSummaryORM，下次加载时作为 system 上下文。
 
+    Phase B4: 接受 memory_store + chat_id 参数，写入 IMemoryStore.set_summary，
+    实现跨任务长对话压缩（对齐 LangMem / Mem0 长对话压缩实践）。
+
     Args:
         messages: 待压缩的消息列表（oldest → newest）
         llm: LLM Provider 实例
         max_messages: 超过此数量才触发摘要
+        memory_store: IMemoryStore 实例（可选，用于持久化摘要）
+        chat_id: 会话 ID（可选，配合 memory_store 使用）
 
     Returns:
         摘要文本（中文，约 200 字以内）；消息数不足时返回空字符串
@@ -186,6 +193,12 @@ async def summarize_messages(
         )
         summary = result.get("content", "").strip()
         log.info("summarized {} messages → {} chars", len(to_summarize), len(summary))
+        # Phase B4: 持久化到 memory_store（IMemoryStore.set_summary）
+        if memory_store and chat_id and summary:
+            try:
+                await memory_store.set_summary(chat_id, summary)
+            except Exception as e:
+                log.warning("set_summary failed for {}: {}", chat_id, e)
         return summary
     except Exception as e:
         log.warning("summarize_messages failed: {}", e)

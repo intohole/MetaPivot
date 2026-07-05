@@ -83,6 +83,9 @@ class AgentState(BaseModel):
     # 工具调用
     plan: list[dict] = Field(default_factory=list, description="规划步骤列表")
     available_tools: list[dict] = Field(default_factory=list, description="可用工具列表（OpenAI格式）")
+    # Phase B1: Re-planning 支持（计划偏差大时触发 update_plan，对齐 LangChain PlanAndExecute）
+    plan_revision_count: int = 0  # 已 re-plan 次数（防震荡，max_revisions=2）
+    original_plan: list[dict] = Field(default_factory=list)  # 原始 plan（用于对比偏差）
 
     # HITL
     pending_confirm: Optional[dict] = None

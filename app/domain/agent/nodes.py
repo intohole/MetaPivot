@@ -41,6 +41,11 @@ async def intent_node(state: AgentState) -> dict:
     # 预加载可用工具（后续 executor 也会用到）+ 内置工具（finish/delegate）
     tools = await skill_service.list_tools_for_llm(permission="user")
     tools = tools + get_builtin_tools()  # Phase 1: 注入内置工具
+    # Phase B2: Tool RAG - 工具数 > 15 时按 query embedding 检索 top-10 相关工具子集
+    from app.domain.agent.tool_index import get_tool_index
+    _ti = get_tool_index()
+    if _ti.should_use_rag(len(tools)):
+        tools = await _ti.retrieve(state.original_message, tools)
     state.available_tools = tools
 
     llm = get_llm()
@@ -270,9 +275,9 @@ async def reflector_node(state: AgentState) -> dict:
         try:
             from app.infra.llm.provider import get_llm
             llm = get_llm()
-            decision, reason = await reflect(state, llm)
-            apply_reflect_decision(state, decision, reason)
-            return {"status": state.status, "error": state.error}
+            decision, reason, hint = await reflect(state, llm)  # Phase B3: 三元组含 hint
+            apply_reflect_decision(state, decision, reason, hint)
+            return {"status": state.status, "error": state.error, "context": state.context}
         except Exception as e:
             log.warning("LLM reflect crashed, fallback to default path: {}", e)
 

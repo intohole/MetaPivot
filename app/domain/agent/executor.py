@@ -39,6 +39,7 @@ async def execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
     流程：
     0. 内置工具早分支（finish / delegate_to_subagent）— Phase 1
     1. 解析 tool_call arguments（JSON）
+    1.5 Phase B7: Guardrail 工具参数校验（危险操作拦截）
     2. 查找 skill_id（不存在则 failed）
     3. 检查 HITL（require_confirm=True 则 waiting_confirm，不执行）
     4. 调用 skill_service.execute（单独计时，便于拆分 LLM vs 工具耗时）
@@ -53,6 +54,18 @@ async def execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
         args = json.loads(tc.function.arguments) if tc.function.arguments else {}
     except json.JSONDecodeError:
         args = {}
+
+    # Phase B7: Guardrail 工具参数校验（delete/bulk_update/drop 危险操作拦截）
+    from app.domain.agent.guardrail import validate_tool_args
+    is_safe, block_reason = validate_tool_args(tool_name, args)
+    if not is_safe:
+        state.add_event("tool_blocked", {"tool": tool_name, "reason": block_reason})
+        return StepRecord(
+            step_index=state.current_step, step_name=f"blocked_{tool_name}",
+            tool_name=tool_name, tool_input=args, status="failed",
+            error=block_reason, tool_output={"error": block_reason, "blocked": True},
+            duration_ms=int((datetime.now() - started).total_seconds() * 1000),
+        )
 
     # Phase 1: 内置工具早分支（不经过 skill_service，避免污染业务工具）
     if tool_name == "finish":
