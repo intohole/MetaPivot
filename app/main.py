@@ -78,6 +78,9 @@ async def lifespan(app: FastAPI):
     await close_event_bus()
     from app.infra.memory.factory import close_memory_store
     await close_memory_store()
+    # Phase A 补丁：关闭向量库连接（Milvus/Chroma client 资源释放，避免 K8s 滚动更新连接泄漏）
+    from app.infra.rag.factory import close_vector_store
+    await close_vector_store()
     await close_db()
     await close_redis()
     # Phase 4: 关闭 OTel SDK，flush 待上报 span
@@ -184,7 +187,9 @@ async def readiness():
     memory_ok = await check_memory_health()
     from app.infra.scheduler.factory import check_scheduler_health
     scheduler_ok = await check_scheduler_health()
-    ready = db_ok and cache_ok and bus_ok and memory_ok and scheduler_ok
+    from app.infra.rag.factory import check_vector_health
+    vector_ok = await check_vector_health()
+    ready = db_ok and cache_ok and bus_ok and memory_ok and scheduler_ok and vector_ok
     return JSONResponse(
         status_code=200 if ready else 503,
         content={
@@ -192,7 +197,7 @@ async def readiness():
             "dependencies": {
                 "db": {"backend": settings.db_backend, "ok": db_ok},
                 "cache": {"backend": settings.cache_backend, "ok": cache_ok},
-                "vector": {"backend": settings.vector_backend},
+                "vector": {"backend": settings.vector_backend, "ok": vector_ok},
                 "event_bus": {"backend": settings.cache_backend, "ok": bus_ok},
                 "memory": {"backend": settings.memory_backend, "ok": memory_ok},
                 "scheduler": {"backend": settings.scheduler_backend, "ok": scheduler_ok},

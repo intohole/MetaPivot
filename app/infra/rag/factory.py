@@ -67,3 +67,19 @@ async def close_vector_store() -> None:
             await close_method()
         _vector_store = None
         log.info("Vector store closed")
+
+
+async def check_vector_health() -> bool:
+    """向量库健康检查（/ready 端点用）
+
+    用 count 探测连接是否正常：local backend 永远 True（无外部依赖），
+    milvus/chroma 探测客户端连接是否存活。
+    """
+    try:
+        store = get_vector_store()
+        # count 探测：local 返回 0，milvus/chroma 走真实 RPC
+        await store.count("__health_check__")
+        return True
+    except Exception as e:
+        log.error("Vector health check failed: {}", e)
+        return False

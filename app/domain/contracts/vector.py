@@ -3,11 +3,12 @@
 支持的实现：
 - LocalVectorStore：进程内 numpy/纯 Python 余弦相似度，适合单机/小企业
 - MilvusVectorStore：分布式向量库，适合超大型企业（百万级 chunk）
+- ChromaVectorStore：Chroma 嵌入式/服务化向量库，适合中小型企业（开发友好）
 
 接口约束：
 - 所有方法异步
 - 向量维度由实现方决定（embed 后由实现方校验）
-- collection 概念对应 Milvus collection / Local 命名空间
+- collection 概念对应 Milvus collection / Local 命名空间 / Chroma collection
 """
 from typing import Optional, Protocol, runtime_checkable
 

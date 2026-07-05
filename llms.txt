@@ -21,7 +21,7 @@ Version: 1.0.0
 200: `{status:string="healthy", version:string, env:string, profile:{db:string, cache:string, vector:string}}`
 
 ### GET /ready - 就绪检查（无需认证）
-200/503: `{status:string, dependencies:{db:{backend:string, ok:boolean}, cache:{backend:string, ok:boolean}, vector:{backend:string}}}`
+200/503: `{status:string, dependencies:{db:{backend:string, ok:boolean}, cache:{backend:string, ok:boolean}, vector:{backend:string, ok:boolean}, event_bus:{backend:string, ok:boolean}, memory:{backend:string, ok:boolean}, scheduler:{backend:string, ok:boolean}}}`
 
 ### GET /metrics - Prometheus 指标端点（无需认证）
 200: `text/plain; version=0.0.4; charset=utf-8` — Prometheus 文本格式
