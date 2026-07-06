@@ -3,7 +3,7 @@
    所有组件均符合 AI 可访问性清单（aria/label/focus）
    ============================================================ */
 (function () {
-  const { computed, onMounted, onUnmounted } = Vue
+  const { computed, onMounted, onUnmounted, ref, watch, nextTick } = Vue
   const Components = {}
 
   /* --- 顶部加载进度条 --- */
@@ -156,7 +156,7 @@
     `
   }
 
-  /* --- 通用模态框 --- */
+  /* --- 通用模态框（Round 5: focus trap + 背景 inert，a11y 闭环）--- */
   Components.BaseModal = {
     props: {
       modelValue: { type: Boolean, default: false },
@@ -165,14 +165,31 @@
     emits: ['update:modelValue', 'close'],
     setup(props, { emit }) {
       const close = () => { emit('update:modelValue', false); emit('close') }
+      const rootRef = ref(null)
+      let releaseTrap = null
+      // focus trap：打开时锁定焦点 + 背景设 inert；关闭时释放 + 恢复焦点
+      watch(() => props.modelValue, async (v) => {
+        if (v) {
+          await nextTick()
+          if (rootRef.value && window.trapFocus) {
+            releaseTrap = window.trapFocus(rootRef.value)
+          }
+        } else if (releaseTrap) {
+          releaseTrap()
+          releaseTrap = null
+        }
+      })
       const onKey = (e) => { if (e.key === 'Escape' && props.modelValue) close() }
       onMounted(() => document.addEventListener('keydown', onKey))
-      onUnmounted(() => document.removeEventListener('keydown', onKey))
-      return { close }
+      onUnmounted(() => {
+        document.removeEventListener('keydown', onKey)
+        if (releaseTrap) releaseTrap()
+      })
+      return { close, rootRef }
     },
     template: `
       <transition name="fade">
-        <div v-if="modelValue" class="fixed inset-0 z-40 flex items-center justify-center p-4" role="dialog" aria-modal="true" :aria-label="title">
+        <div v-if="modelValue" ref="rootRef" class="fixed inset-0 z-40 flex items-center justify-center p-4" role="dialog" aria-modal="true" :aria-label="title">
           <div class="absolute inset-0 bg-black/50" @click="close" aria-hidden="true"></div>
           <div :class="['relative card w-full shadow-modal', width]">
             <header class="flex items-center justify-between px-6 py-4 border-b border-border">
