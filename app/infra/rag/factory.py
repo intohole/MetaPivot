@@ -74,11 +74,15 @@ async def check_vector_health() -> bool:
 
     用 count 探测连接是否正常：local backend 永远 True（无外部依赖），
     milvus/chroma 探测客户端连接是否存活。
+
+    注意：collection 名必须符合 Chroma 命名规则（alphanumeric 开头结尾，
+    不能以 _ 开头/结尾），否则 ValueError 被 try/except 吞掉导致假阳性。
     """
     try:
         store = get_vector_store()
         # count 探测：local 返回 0，milvus/chroma 走真实 RPC
-        await store.count("__health_check__")
+        # 用合法 collection 名（health_check 符合 Chroma 规则，__health_check__ 会抛 ValueError）
+        await store.count("health_check")
         return True
     except Exception as e:
         log.error("Vector health check failed: {}", e)
