@@ -1,0 +1,152 @@
+/* ============================================================
+   command_palette.js — ⌘K 命令面板组件
+   挂载：window.Components.CommandPalette
+   自实现浮层（非 <dialog>），复用 focus_trap.js
+   ARIA: combobox + listbox + option + aria-activedescendant
+   ============================================================ */
+(function () {
+  const { ref, computed, nextTick, onMounted, onUnmounted } = Vue
+  const Components = window.Components || (window.Components = {})
+
+  Components.CommandPalette = {
+    name: 'CommandPalette',
+    setup() {
+      const state = window.AppState
+      const visible = ref(false)
+      const query = ref('')
+      const activeId = ref('')
+      const rootRef = ref(null)
+      const inputRef = ref(null)
+      const listRef = ref(null)
+      let releaseTrap = null
+
+      // 分组计算：无 query 时显示 recent + navigation + actions；有 query 时 fuzzy 过滤
+      const groups = computed(() => {
+        const all = window.Commands ? window.Commands.getAll() : { recent: [], navigation: [], actions: [] }
+        const q = query.value.trim().toLowerCase()
+        if (!q) {
+          return [
+            { label: '最近使用', items: all.recent },
+            { label: '导航', items: all.navigation },
+            { label: '动作', items: all.actions }
+          ].filter(g => g.items.length > 0)
+        }
+        const flat = [...all.recent, ...all.navigation, ...all.actions]
+        const matched = window.fuzzySearch(flat, q, { keys: ['label', 'keywords', 'id'] })
+          .map(m => m.item)
+        return matched.length > 0 ? [{ label: '搜索结果', items: matched }] : []
+      })
+
+      // 扁平化所有可见项（用于键盘导航）
+      const flatItems = computed(() => groups.value.flatMap(g => g.items))
+
+      // 打开时初始化
+      const open = () => {
+        visible.value = true
+        query.value = ''
+        nextTick(() => {
+          if (inputRef.value) inputRef.value.focus()
+          if (rootRef.value && window.trapFocus) {
+            releaseTrap = window.trapFocus(rootRef.value, { initialFocus: inputRef.value })
+          }
+          // 默认高亮第一项
+          if (flatItems.value.length > 0) activeId.value = flatItems.value[0].id
+        })
+      }
+
+      const close = () => {
+        visible.value = false
+        if (releaseTrap) { releaseTrap(); releaseTrap = null }
+      }
+
+      // 执行命令
+      const execute = (item) => {
+        if (!item) return
+        if (window.Commands) window.Commands.markUsed(item.id)
+        close()
+        if (item.path) {
+          state.navigate(item.path)
+        } else if (typeof item.action === 'function') {
+          item.action()
+        }
+      }
+
+      // 键盘导航
+      const onKeydown = (e) => {
+        const items = flatItems.value
+        if (items.length === 0) return
+        const idx = items.findIndex(i => i.id === activeId.value)
+        if (e.key === 'ArrowDown') {
+          e.preventDefault()
+          activeId.value = items[(idx + 1) % items.length].id
+          scrollIntoView()
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault()
+          activeId.value = items[(idx - 1 + items.length) % items.length].id
+          scrollIntoView()
+        } else if (e.key === 'Enter') {
+          e.preventDefault()
+          execute(items[idx])
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          close()
+        }
+      }
+
+      const scrollIntoView = () => {
+        nextTick(() => {
+          const el = listRef.value && listRef.value.querySelector('[aria-selected="true"]')
+          if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' })
+        })
+      }
+
+      // 暴露 open 方法给父组件通过 ref 调用
+      onMounted(() => { /* 父组件通过 ref.open() 调用 */ })
+      onUnmounted(() => { if (releaseTrap) releaseTrap() })
+
+      return { visible, query, activeId, rootRef, inputRef, listRef, groups, flatItems, open, close, execute, onKeydown }
+    },
+    template: `
+      <transition name="fade">
+        <div v-if="visible" class="fixed inset-0 z-command flex items-start justify-center pt-[15vh] px-4" @mousedown.self="close">
+          <div ref="rootRef" role="dialog" aria-modal="true" aria-label="命令面板"
+               class="card w-full max-w-xl shadow-modal overflow-hidden">
+            <div class="flex items-center gap-3 px-4 py-3 border-b border-border">
+              <span aria-hidden="true" class="text-ink-muted">🔍</span>
+              <input ref="inputRef" v-model="query" type="text"
+                     role="combobox" aria-expanded="true" aria-controls="cmd-list"
+                     :aria-activedescendant="activeId"
+                     placeholder="输入命令或页面名..."
+                     class="flex-1 bg-transparent outline-none text-ink placeholder-ink-subtle"
+                     @keydown="onKeydown" />
+              <kbd class="text-xs text-ink-subtle border border-border rounded px-1.5 py-0.5">ESC</kbd>
+            </div>
+            <ul ref="listRef" id="cmd-list" role="listbox" class="max-h-[50vh] overflow-y-auto py-2">
+              <template v-for="(group, gi) in groups" :key="gi">
+                <li role="presentation" class="px-4 py-1 text-xs font-medium text-ink-subtle uppercase tracking-wide">{{ group.label }}</li>
+                <li v-for="item in group.items" :key="item.id" :id="item.id" role="option"
+                    :aria-selected="item.id === activeId"
+                    :class="['flex items-center gap-3 px-4 py-2 cursor-pointer text-sm transition-colors',
+                             item.id === activeId ? 'bg-brand-light text-brand' : 'text-ink hover:bg-surface-muted']"
+                    @mouseenter="activeId = item.id"
+                    @click="execute(item)">
+                  <span aria-hidden="true" class="text-base w-5 text-center">{{ item.icon || '›' }}</span>
+                  <span class="flex-1">{{ item.label }}</span>
+                  <kbd v-if="item.shortcut" class="text-xs text-ink-subtle border border-border rounded px-1.5 py-0.5">{{ item.shortcut }}</kbd>
+                </li>
+              </template>
+              <li v-if="flatItems.length === 0" class="px-4 py-8 text-center text-ink-subtle text-sm">
+                无匹配命令
+              </li>
+            </ul>
+            <footer class="flex items-center gap-4 px-4 py-2 border-t border-border text-xs text-ink-subtle bg-surface-muted">
+              <span><kbd class="border border-border rounded px-1">↑</kbd><kbd class="border border-border rounded px-1 ml-0.5">↓</kbd> 导航</span>
+              <span><kbd class="border border-border rounded px-1">↵</kbd> 执行</span>
+              <span><kbd class="border border-border rounded px-1">esc</kbd> 关闭</span>
+            </footer>
+          </div>
+        </div>
+      </transition>
+    `
+  }
+})()

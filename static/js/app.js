@@ -4,8 +4,34 @@
    Round 4: 主题切换按钮 + 全局 ConfirmDialog 挂载 + Skeleton 注册
    ============================================================ */
 (function () {
-  const { createApp, computed, defineComponent, watch, ref } = Vue
+  const { createApp, computed, defineComponent, watch, ref, onMounted, onUnmounted } = Vue
   const state = window.AppState
+
+  /* === 预注册命令（供 Command Palette 消费）=== */
+  if (window.Commands) {
+    const navCmds = [
+      { id: 'nav-dashboard', label: '仪表盘', icon: '📊', path: '/dashboard', keywords: 'dashboard home 首页', group: 'navigation', shortcut: 'g d' },
+      { id: 'nav-agent', label: 'Agent 任务', icon: '🤖', path: '/agent', keywords: 'agent 任务 对话', group: 'navigation', shortcut: 'g a' },
+      { id: 'nav-skills', label: 'Skill 管理', icon: '🧩', path: '/skills', keywords: 'skill 技能 mcp', group: 'navigation', shortcut: 'g s' },
+      { id: 'nav-workflows', label: '工作流', icon: '⚡', path: '/workflows', keywords: 'workflow 工作流 flow', group: 'navigation', shortcut: 'g w' },
+      { id: 'nav-knowledge', label: '知识库', icon: '📚', path: '/knowledge', keywords: 'knowledge 知识 文档', group: 'navigation', shortcut: 'g k' },
+      { id: 'nav-channels', label: 'IM 渠道', icon: '💬', path: '/channels', keywords: 'channel 渠道 钉钉 企微 飞书', group: 'navigation', shortcut: 'g c' }
+    ]
+    navCmds.forEach(c => window.Commands.register(c))
+    // 动作命令（按角色过滤在执行时处理）
+    window.Commands.register({
+      id: 'action-logout', label: '退出登录', icon: '🚪', keywords: 'logout exit 退出', group: 'actions',
+      action: () => {
+        const s = window.AppState
+        s.confirmAction({ title: '退出登录', message: '确认退出登录？', confirmText: '退出', danger: true })
+          .then(act => { if (act === 'confirm') s.logout() })
+      }
+    })
+    window.Commands.register({
+      id: 'action-theme', label: '切换主题', icon: '🌙', keywords: 'theme dark light 主题 暗色', group: 'actions',
+      action: () => window.AppState.toggleTheme()
+    })
+  }
 
   /* === 路由配置 === */
   const ROUTES = [
@@ -60,7 +86,17 @@
         })
         if (action === 'confirm') state.logout()
       }
-      return { state, currentRoute, visibleNav, sidebarOpen, toggleSidebar, handleLogout }
+      // Phase 2: 命令面板 ⌘K / Ctrl+K 全局快捷键（focus trap 阻断 Modal 内触发）
+      const paletteRef = ref(null)
+      const onGlobalKeydown = (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+          e.preventDefault()
+          if (paletteRef.value && paletteRef.value.open) paletteRef.value.open()
+        }
+      }
+      onMounted(() => document.addEventListener('keydown', onGlobalKeydown))
+      onUnmounted(() => document.removeEventListener('keydown', onGlobalKeydown))
+      return { state, currentRoute, visibleNav, sidebarOpen, toggleSidebar, handleLogout, paletteRef }
     },
     template: `
       <div>
@@ -121,6 +157,8 @@
 
         <!-- Round 4: 全局 ConfirmDialog（业务页面调 state.confirmAction） -->
         <confirm-dialog :model-value="state.confirmState.visible" :title="state.confirmState.title" :message="state.confirmState.message" :confirm-text="state.confirmState.confirmText" :danger="state.confirmState.danger" @update:model-value="v => { if (!v) state.resolveConfirm('cancel') }" @confirm="state.resolveConfirm('confirm')" @cancel="state.resolveConfirm('cancel')" />
+        <!-- Phase 2: 命令面板（⌘K / Ctrl+K 唤起） -->
+        <command-palette ref="paletteRef" />
       </div>
     `
   })
@@ -140,6 +178,12 @@
   app.component('FormField', C.FormField)
   app.component('Skeleton', C.Skeleton)
   app.component('TableSkeleton', C.TableSkeleton)
+  // Phase 2: 新增交互组件
+  app.component('CommandPalette', C.CommandPalette)
+  app.component('DropdownMenu', C.DropdownMenu)
+  app.component('Tooltip', C.Tooltip)
+  app.component('Tabs', C.Tabs)
+  app.component('Breadcrumb', C.Breadcrumb)
 
   // 注册页面组件（pages/*.js 已先于本文件执行，挂载到 window.Pages）
   const P = window.Pages || {}
