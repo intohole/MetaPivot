@@ -164,6 +164,14 @@ body {
 .fade-enter-active, .fade-leave-active { transition: opacity var(--motion-base) var(--ease-out); }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 
+/* Drawer 侧滑动画 */
+.drawer-fade-enter-active, .drawer-fade-leave-active { transition: opacity var(--motion-base) var(--ease-out); }
+.drawer-fade-enter-active .drawer-slide-right, .drawer-fade-leave-active .drawer-slide-right { transition: transform var(--motion-slow) var(--ease-out); }
+.drawer-fade-enter-active .drawer-slide-left, .drawer-fade-leave-active .drawer-slide-left { transition: transform var(--motion-slow) var(--ease-out); }
+.drawer-fade-enter-from, .drawer-fade-leave-to { opacity: 0; }
+.drawer-fade-enter-from .drawer-slide-right, .drawer-fade-leave-to .drawer-slide-right { transform: translateX(100%); }
+.drawer-fade-enter-from .drawer-slide-left, .drawer-fade-leave-to .drawer-slide-left { transform: translateX(-100%); }
+
 /* 链接默认样式 */
 a { color: var(--color-brand); text-decoration: none; }
 a:hover { text-decoration: underline; }

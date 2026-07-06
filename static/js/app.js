@@ -184,6 +184,10 @@
   app.component('Tooltip', C.Tooltip)
   app.component('Tabs', C.Tabs)
   app.component('Breadcrumb', C.Breadcrumb)
+  // Phase 3: 表单 + 抽屉组件
+  app.component('Switch', C.Switch)
+  app.component('TagInput', C.TagInput)
+  app.component('Drawer', C.Drawer)
 
   // 注册页面组件（pages/*.js 已先于本文件执行，挂载到 window.Pages）
   const P = window.Pages || {}

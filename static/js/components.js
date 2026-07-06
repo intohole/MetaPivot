@@ -95,66 +95,7 @@
     template: `<span :class="['badge', cfg[0]]"><span class="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true"></span>{{ cfg[1] }}</span>`
   }
 
-  /* --- 分页 --- */
-  Components.Pagination = {
-    props: { page: Number, pageSize: Number, total: Number },
-    emits: ['change'],
-    setup(props, { emit }) {
-      const totalPages = computed(() => Math.max(1, Math.ceil(props.total / props.pageSize)))
-      const go = (p) => { if (p >= 1 && p <= totalPages.value) emit('change', p) }
-      return { totalPages, go }
-    },
-    template: `
-      <nav v-if="total > 0" class="flex items-center justify-between py-3" aria-label="分页">
-        <p class="text-sm text-ink-muted">共 {{ total }} 条 / 第 {{ page }}/{{ totalPages }} 页</p>
-        <div class="flex gap-1">
-          <button class="btn btn-ghost" :disabled="page <= 1" @click="go(page - 1)" aria-label="上一页">上一页</button>
-          <button class="btn btn-ghost" :disabled="page >= totalPages" @click="go(page + 1)" aria-label="下一页">下一页</button>
-        </div>
-      </nav>
-    `
-  }
-
-  /* --- 通用表格 --- */
-  Components.BaseTable = {
-    props: {
-      columns: { type: Array, required: true },  // [{key, label, width, align}]
-      rows: { type: Array, default: () => [] },
-      empty: { type: String, default: '暂无数据' },
-      loading: { type: Boolean, default: false }
-    },
-    template: `
-      <div class="overflow-x-auto" role="region" aria-label="数据表格">
-        <table class="min-w-full divide-y divide-border">
-          <thead class="bg-surface-muted">
-            <tr>
-              <th v-for="c in columns" :key="c.key"
-                  :style="c.width ? 'width:' + c.width : ''"
-                  :class="['px-4 py-3 text-left text-xs font-medium text-ink-muted uppercase tracking-wider', c.align === 'center' ? 'text-center' : '']">
-                {{ c.label }}
-              </th>
-            </tr>
-          </thead>
-          <tbody class="bg-surface divide-y divide-border">
-            <tr v-if="loading">
-              <td :colspan="columns.length" class="px-4 py-8 text-center text-ink-muted">
-                <span role="status">加载中...</span>
-              </td>
-            </tr>
-            <tr v-else-if="rows.length === 0">
-              <td :colspan="columns.length" class="px-4 py-8 text-center text-ink-muted">{{ empty }}</td>
-            </tr>
-            <tr v-for="(row, idx) in rows" :key="row.id || idx" class="hover:bg-surface-muted transition-colors">
-              <td v-for="c in columns" :key="c.key"
-                  :class="['px-4 py-3 text-sm text-ink', c.align === 'center' ? 'text-center' : '']">
-                <slot :name="c.key" :row="row" :value="row[c.key]">{{ row[c.key] }}</slot>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    `
-  }
+  /* --- 分页 + 通用表格（Phase 3: 已迁移到 components/table.js，支持 selectable/sortable/stickyHeader/页码按钮+跳页）--- */
 
   /* --- 通用模态框（Round 5: focus trap + 背景 inert，a11y 闭环）--- */
   Components.BaseModal = {

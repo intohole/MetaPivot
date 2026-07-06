@@ -104,7 +104,7 @@
         } catch (e) {}
       }
 
-      const onPageChange = (p) => { page.value = p; loadList() }
+      const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }
       const onSearch = () => { page.value = 1; loadList() }
 
       onMounted(() => { loadList(); loadRoles() })

@@ -145,7 +145,7 @@
         } catch (e) {}
       }
 
-      const onPageChange = (p) => { page.value = p; loadList() }
+      const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }
       const onSearch = () => { page.value = 1; loadList() }
 
       onMounted(loadList)
@@ -174,8 +174,9 @@
               <p class="font-medium text-ink">{{ row.name }}</p>
               <p class="text-xs text-ink-muted">{{ row.description || '无描述' }}</p>
             </template>
-            <template #enabled="{ value }">
-              <span :class="['badge', value ? 'badge-success' : 'badge-muted']">{{ value ? '启用' : '禁用' }}</span>
+            <template #enabled="{ row }">
+              <switch v-if="isAdmin" :model-value="row.enabled" @update:model-value="() => toggleEnabled(row)" :aria-label="(row.enabled ? '禁用' : '启用') + ' ' + row.name" size="sm" />
+              <span v-else :class="['badge', row.enabled ? 'badge-success' : 'badge-muted']">{{ row.enabled ? '启用' : '禁用' }}</span>
             </template>
             <template #version="{ value }"><span class="text-sm">v{{ value }}</span></template>
             <template #created_at="{ value }"><span class="text-xs text-ink-muted">{{ value?.slice(0, 16) }}</span></template>
@@ -183,7 +184,6 @@
               <div class="flex gap-1 justify-center">
                 <button class="btn btn-ghost text-xs" @click="openRun(row)" title="执行">▶️</button>
                 <button v-if="isAdmin" class="btn btn-ghost text-xs" @click="openEdit(row)" title="编辑">✏️</button>
-                <button v-if="isAdmin" class="btn btn-ghost text-xs" @click="toggleEnabled(row)" :title="row.enabled ? '禁用' : '启用'">{{ row.enabled ? '⏸️' : '▶️' }}</button>
                 <button v-if="isAdmin" class="btn btn-ghost text-xs text-danger" @click="removeRow(row)" title="删除">🗑️</button>
               </div>
             </template>

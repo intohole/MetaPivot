@@ -136,7 +136,7 @@
         } catch (e) { testResult.value = { success: false, error: { message: '执行失败' } } }
       }
 
-      const onPageChange = (p) => { page.value = p; loadList() }
+      const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }
       const onSearch = () => { page.value = 1; loadList() }
 
       onMounted(loadList)
@@ -175,14 +175,14 @@
             <template #source_ref="{ value }"><span class="font-mono text-xs text-ink-muted">{{ value }}</span></template>
             <template #source_type="{ value }"><span class="badge badge-info">{{ value }}</span></template>
             <template #call_count="{ value }"><span class="text-sm">{{ value || 0 }}</span></template>
-            <template #enabled="{ value }">
-              <span :class="['badge', value ? 'badge-success' : 'badge-muted']">{{ value ? '启用' : '禁用' }}</span>
+            <template #enabled="{ row }">
+              <switch v-if="isAdmin" :model-value="row.enabled" @update:model-value="() => toggleEnable(row)" :aria-label="(row.enabled ? '禁用' : '启用') + ' ' + row.name" size="sm" />
+              <span v-else :class="['badge', row.enabled ? 'badge-success' : 'badge-muted']">{{ row.enabled ? '启用' : '禁用' }}</span>
             </template>
             <template #actions="{ row }">
               <div class="flex gap-1 justify-center">
                 <button class="btn btn-ghost text-xs" @click="openTest(row)" title="测试">🧪</button>
                 <button v-if="isAdmin" class="btn btn-ghost text-xs" @click="openEdit(row)" title="编辑">✏️</button>
-                <button v-if="isAdmin" class="btn btn-ghost text-xs" @click="toggleEnable(row)" :title="row.enabled ? '禁用' : '启用'">{{ row.enabled ? '⏸️' : '▶️' }}</button>
                 <button v-if="isAdmin" class="btn btn-ghost text-xs text-danger" @click="removeRow(row)" title="删除">🗑️</button>
               </div>
             </template>
