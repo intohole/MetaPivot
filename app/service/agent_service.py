@@ -20,6 +20,7 @@ from app.domain.agent.state import AgentState, AgentStatus
 from app.domain.agent.stream import stream_manager
 from app.domain.contracts.judge import IJudge
 from app.domain.contracts.memory import IMemoryStore
+from app.domain.contracts.retrieval import IQueryRouter, IRetriever
 from app.infra.db.models_core import AgentTaskORM
 from app.infra.db.session import get_db_session
 from app.service.agent_persister import (
@@ -50,6 +51,9 @@ class AgentService:
     _memory_store: Optional[IMemoryStore] = None
     # L4 Judge 评估器（DI 注入，保留扩展点；当前 graph.py 直接用 get_judge 单例）
     _judge: Optional[IJudge] = None
+    # Phase 4.1: Agentic RAG 三库统一检索（DI 注入；未注入时走旧 memory search_semantic 逻辑）
+    _retriever: Optional[IRetriever] = None
+    _query_router: Optional[IQueryRouter] = None
 
     def set_memory_store(self, store: IMemoryStore) -> None:
         """DI 注入记忆存储（由 main.py lifespan 调用）
@@ -69,6 +73,20 @@ class AgentService:
         """
         self._judge = judge
         log.info("Judge injected into AgentService")
+
+    def set_retriever(self, retriever: IRetriever) -> None:
+        """Phase 4.1: DI 注入三库统一检索器（由 main.py lifespan 调用）
+
+        注入后 agent 启动时走 Adaptive RAG（QueryRouter 路由 + UnifiedRetriever 检索），
+        未注入时向后兼容走旧 memory_store.search_semantic 逻辑。
+        """
+        self._retriever = retriever
+        log.info("Retriever injected into AgentService")
+
+    def set_query_router(self, router: IQueryRouter) -> None:
+        """Phase 4.1: DI 注入查询路由器（由 main.py lifespan 调用）"""
+        self._query_router = router
+        log.info("QueryRouter injected into AgentService")
 
     # ============ 任务生命周期 ============
 
@@ -136,18 +154,14 @@ class AgentService:
         if chat_id and self._memory_store is not None:
             try:
                 history_messages = await self._memory_store.load_history(chat_id, limit=20)
-                # 语义记忆补充：跨会话语义召回相关事实/消息（memory_backend=semantic 时生效）
-                # 用户问"我有什么偏好"时，从 agent_memory collection 召回相关事实注入上下文
-                if settings.memory_backend == "semantic" and message:
-                    semantic_hits = await self._memory_store.search_semantic(
-                        message, chat_id, top_k=5,
+                # Phase 4.1: Adaptive RAG 三库统一检索
+                # 注入 _retriever + _query_router 时走统一检索（QueryRouter 路由 + UnifiedRetriever 三库）；
+                # 未注入时向后兼容走旧 memory_store.search_semantic（仅 semantic backend 生效）
+                rag_ctx = await self._build_rag_context(message, chat_id, user_id)
+                if rag_ctx:
+                    history_messages = (
+                        [{"role": "system", "content": rag_ctx}] + history_messages
                     )
-                    if semantic_hits:
-                        semantic_ctx = self._format_semantic_context(semantic_hits)
-                        # 语义召回作为 system 消息前置注入（不污染 user/assistant 交替结构）
-                        history_messages = (
-                            [{"role": "system", "content": semantic_ctx}] + history_messages
-                        )
             except Exception as e:
                 log.warning("load_history failed for {}: {}", chat_id, e)
 
@@ -300,6 +314,61 @@ class AgentService:
             # 事实型记忆优先展示（type=fact 是 consolidate 抽取的长期记忆）
             tag = "[事实]" if meta.get("type") == "fact" else f"[{role}]" if role else ""
             lines.append(f"- {tag} {content}（相似度 {score:.2f}）")
+        return "\n".join(lines)
+
+    async def _build_rag_context(
+        self, message: str, chat_id: str, user_id: str,
+    ) -> str:
+        """Phase 4.1: 构建 RAG 上下文（Adaptive RAG 优先，向后兼容旧 semantic 逻辑）
+
+        Returns:
+            格式化的 system 消息文本；无检索结果时返回空字符串
+        """
+        if not message:
+            return ""
+        # Phase 4.1: 注入 retriever + query_router 时走 Adaptive RAG 三库统一检索
+        if self._retriever is not None and self._query_router is not None:
+            try:
+                intent = await self._query_router.route(message, {"chat_id": chat_id, "user_id": user_id})
+                if intent == "direct":
+                    return ""  # 闲聊/常识不检索（降本）
+                result = await self._retriever.retrieve(
+                    message, intent, top_k=5,
+                    context={"chat_id": chat_id, "user_id": user_id, "permission": "user"},
+                )
+                items = result.get("items", [])
+                if not items:
+                    return ""
+                return self._format_unified_context(items, intent)
+            except Exception as e:
+                log.warning("Adaptive RAG failed, fallback to semantic: {}", e)
+        # 向后兼容：未注入 retriever 时走旧 memory_store.search_semantic
+        if settings.memory_backend == "semantic" and self._memory_store:
+            try:
+                hits = await self._memory_store.search_semantic(message, chat_id, top_k=5)
+                return self._format_semantic_context(hits) if hits else ""
+            except Exception as e:
+                log.warning("semantic search fallback failed: {}", e)
+        return ""
+
+    @staticmethod
+    def _format_unified_context(items: list[dict], intent: str) -> str:
+        """将三库统一检索结果格式化为 system 消息"""
+        source_label = {"knowledge": "知识库", "memory": "记忆", "tool": "可用工具"}.get(intent, intent)
+        lines = [f"【相关{source_label}（Adaptive RAG 检索，仅供参考）】"]
+        for it in items[:5]:
+            content = (it.get("content") or "")[:200]
+            score = it.get("score", 0.0)
+            src = it.get("source_type", "")
+            meta = it.get("metadata") or {}
+            if src == "tool":
+                name = meta.get("name", "")
+                lines.append(f"- [工具] {name}: {content}（相关度 {score:.2f}）")
+            elif src == "memory":
+                tag = "[事实]" if meta.get("type") == "fact" else f"[{meta.get('role', '')}]"
+                lines.append(f"- {tag} {content}（相似度 {score:.2f}）")
+            else:
+                lines.append(f"- {content}（相似度 {score:.2f}）")
         return "\n".join(lines)
 
     async def _maybe_consolidate(self, chat_id: str) -> None:

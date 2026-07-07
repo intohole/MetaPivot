@@ -53,6 +53,27 @@ async def lifespan(app: FastAPI):
     from app.service.agent_service import agent_service
     memory_store = await get_memory_store()
     agent_service.set_memory_store(memory_store)
+    # Phase 4.1: 初始化 Agentic RAG 三库统一检索（DI 注入到 AgentService）
+    # UnifiedRetriever 融合 knowledge/memory/tool 三库；QueryRouter 做 Adaptive RAG 意图路由
+    # 未注入时向后兼容走旧 memory_store.search_semantic 逻辑
+    try:
+        from app.infra.llm.provider import get_llm
+        from app.infra.rag.factory import get_vector_store
+        from app.service.skill_service import skill_service
+        from app.domain.retrieval import QueryRouter, UnifiedRetriever
+        vector_store = get_vector_store()
+        llm = get_llm()
+        retriever = UnifiedRetriever(
+            vector_store=vector_store,
+            memory_store=memory_store,
+            llm=llm,
+            tool_provider=skill_service.list_tools_for_llm,
+        )
+        agent_service.set_retriever(retriever)
+        agent_service.set_query_router(QueryRouter())
+        log.info("Phase 4.1 Agentic RAG initialized (UnifiedRetriever + QueryRouter)")
+    except Exception as e:
+        log.warning("Phase 4.1 Agentic RAG init failed, fallback to legacy semantic search: {}", e)
     # 初始化定时任务调度器（DI 启动后台轮询；AsyncScheduler 单机 / CeleryScheduler 集群）
     from app.infra.scheduler.factory import get_scheduler
     scheduler = await get_scheduler()

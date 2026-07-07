@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from app.infra.db.models_core import AgentTaskORM, AgentTaskStepORM
 from app.infra.db.session import get_db_session
-from app.infra.llm.provider import get_llm
+from app.utils.llm_structured import llm_json_call
 from app.utils.logger import get_logger
 from app.utils.response import AppError, ErrorCode
 
@@ -61,23 +61,7 @@ async def extract_skill_from_task(task_id: str) -> dict:
         raise AppError(ErrorCode.WORKFLOW_INVALID, "任务无工具调用步骤", 400)
 
     trace_summary = _build_trace_summary(task, steps)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": trace_summary},
-    ]
-    llm = get_llm()
-    result = await llm.chat_completion(
-        messages,
-        response_format={"type": "json_object"},
-        temperature=0.3,
-        max_tokens=800,
-    )
-    content = result.get("content", "{}")
-    try:
-        draft = json.loads(content)
-    except json.JSONDecodeError as e:
-        log.error("LLM extract parse failed: {}", e)
-        raise AppError(ErrorCode.LLM_RESPONSE_INVALID, "LLM 输出解析失败", 500)
+    draft = await llm_json_call(SYSTEM_PROMPT, trace_summary, temperature=0.3, max_tokens=800)
     draft["task_id"] = task_id
     draft["step_count"] = len(steps)
     log.info("Skill extracted from task {}: confidence={}", task_id, draft.get("confidence"))
