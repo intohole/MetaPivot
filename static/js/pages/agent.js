@@ -1,6 +1,6 @@
 /* Agent 任务页 — 对话界面 + 任务历史 + SSE 实时流式订阅 + Markdown 渲染 */
 (function () {
-  const { ref, reactive, onMounted, computed, nextTick } = Vue
+  const { ref, reactive, onMounted, onUnmounted, computed, nextTick } = Vue
   window.Pages = window.Pages || {}
 
   window.Pages.Agent = {
@@ -16,6 +16,8 @@
       const history = ref([])
       const streaming = ref(false)
       const streamingText = ref('')  // 流式 reply 累积文本（token 事件拼接）
+      const reconnecting = ref(false)  // SSE 断线重连中
+      const reconnectAttempt = ref(0)  // 当前重试次数
       const chatBox = ref(null)
       let abortSSE = null  // SSE 订阅取消函数
 
@@ -58,9 +60,23 @@
           })
           currentTaskId.value = data.task_id
           state.notify('Agent 任务已创建：' + data.task_id.slice(0, 8), 'info')
-          // SSE 流式订阅（替代 2s 轮询）
+          // SSE 流式订阅（替代 2s 轮询）— 启用断线自动重连
           const streamPath = '/agent/tasks/' + data.task_id + '/stream'
-          abortSSE = window.API.streamSSE(streamPath, onSSEEvent, onSSEError, onSSEClose)
+          abortSSE = window.API.streamSSE(streamPath, onSSEEvent, onSSEError, onSSEClose, {
+            maxRetries: 5,
+            onReconnect: (attempt, delay) => {
+              if (attempt === 0) {
+                // 重连成功
+                reconnecting.value = false
+                reconnectAttempt.value = 0
+                state.notify('实时连接已恢复', 'success', 2000)
+              } else {
+                reconnecting.value = true
+                reconnectAttempt.value = attempt
+                state.notify('连接断开，' + (delay / 1000) + '秒后重连（第' + attempt + '次）', 'warning', 3000)
+              }
+            }
+          })
         } catch (e) {
           streaming.value = false
           // 发送失败回滚用户消息，避免"有问无答"困惑
@@ -135,18 +151,51 @@
       const replayEventToStep = (e) => pushStep(e.event_type, e.event_data || {})
 
       const onSSEError = (e) => {
+        // 重连耗尽后才触发此处 — 此时任务可能仍在后端执行
+        reconnecting.value = false
         streaming.value = false
-        state.notify('SSE 连接失败：' + (e.message || '未知错误'), 'error')
+        const terminal = ['completed', 'failed', 'cancelled'].includes(taskStatus.value)
+        if (!terminal) {
+          state.notify('实时连接失败，任务仍在后台执行，可在历史中查看结果', 'warning', 5000)
+          loadHistory()
+        } else {
+          state.notify('SSE 连接失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const onSSEClose = () => {
-        // SSE 连接关闭：若任务未达终态，提示用户连接中断
+        // SSE 正常关闭（服务端主动关闭或任务完成）
+        // 若正在重连，不做处理（重连逻辑由 onReconnect 接管）
+        if (reconnecting.value) return
         const terminal = ['completed', 'failed', 'cancelled'].includes(taskStatus.value)
         streaming.value = false
         if (!terminal && currentTaskId.value) {
-          state.notify('实时连接已断开，可在历史中查看任务最终结果', 'warning')
-          loadHistory()  // 刷新历史以获取最终状态
+          // 非正常关闭且任务未终态 — 尝试刷新历史获取最终状态
+          loadHistory()
         }
+      }
+
+      // 手动重连：用户点击"重连"按钮时调用
+      const manualReconnect = () => {
+        if (!currentTaskId.value) return
+        if (abortSSE) { abortSSE(); abortSSE = null }
+        reconnecting.value = false
+        streaming.value = true
+        const streamPath = '/agent/tasks/' + currentTaskId.value + '/stream'
+        abortSSE = window.API.streamSSE(streamPath, onSSEEvent, onSSEError, onSSEClose, {
+          maxRetries: 5,
+          onReconnect: (attempt, delay) => {
+            if (attempt === 0) {
+              reconnecting.value = false
+              reconnectAttempt.value = 0
+              state.notify('实时连接已恢复', 'success', 2000)
+            } else {
+              reconnecting.value = true
+              reconnectAttempt.value = attempt
+            }
+          }
+        })
+        state.notify('正在重新连接...', 'info', 2000)
       }
 
       const handleConfirm = async (decision) => {
@@ -227,10 +276,16 @@
         }
       })
 
+      // 组件卸载时清理 SSE 连接，防止内存泄漏
+      onUnmounted(() => {
+        if (abortSSE) { abortSSE(); abortSSE = null }
+      })
+
       return {
         messages, inputMsg, currentTaskId, taskStatus, taskSteps, waitingConfirm,
-        history, streaming, streamingText, canSend, chatBox, columns, renderMarkdown,
-        sendMessage, handleConfirm, cancelTask, viewHistory, state,
+        history, streaming, streamingText, reconnecting, reconnectAttempt, canSend,
+        chatBox, columns, renderMarkdown,
+        sendMessage, handleConfirm, cancelTask, viewHistory, manualReconnect, state,
         showPostActions, saveAsSkill, rerunTask
       }
     },
@@ -258,6 +313,13 @@
               <div v-if="streaming" class="flex justify-start">
                 <div class="bg-surface border border-border px-4 py-2 rounded-lg text-sm text-ink-muted">
                   <span class="inline-block animate-pulse">●●● 思考中</span>
+                </div>
+              </div>
+              <!-- SSE 断线重连状态指示器 -->
+              <div v-if="reconnecting" class="flex justify-center">
+                <div class="bg-amber-50 border border-amber-200 px-4 py-2 rounded-lg text-sm text-amber-900 flex items-center gap-2">
+                  <span class="inline-block animate-spin">⟳</span>
+                  <span>连接中断，自动重连中（第 {{ reconnectAttempt }} 次）...</span>
                 </div>
               </div>
             </div>
@@ -293,6 +355,12 @@
                 {{ streaming ? '执行中...' : '发送' }}
               </button>
             </form>
+            <!-- 连接断开手动重连条 -->
+            <div v-if="!streaming && !reconnecting && currentTaskId && !['completed','failed','cancelled'].includes(taskStatus) && taskStatus"
+                 class="mt-2 flex items-center gap-2 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+              <span>⚠️ 实时连接已断开，任务仍在后台执行</span>
+              <button class="btn btn-secondary text-xs py-1 px-2" @click="manualReconnect">手动重连</button>
+            </div>
           </base-card>
         </div>
 

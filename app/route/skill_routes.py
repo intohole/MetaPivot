@@ -180,6 +180,99 @@ async def publish_skill(
     return ok(await skill_service.publish_to_team(skill_id, user.user_id), request)
 
 
+# ============ Skill 自进化：草稿 Review ============
+
+@router.get("/drafts/list", summary="Skill 草稿列表（待审核）")
+async def list_drafts(
+    request: Request,
+    status: str = Query("pending", pattern="^(pending|approved|rejected)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: CurrentUser = Depends(require_permission("skill:read")),
+):
+    from app.domain.skill.evolution import list_drafts as _impl
+    items, total = await _impl(status=status, owner_id="", page=page, page_size=page_size)
+    return ok(paginate(items, total, page, page_size), request)
+
+
+@router.post("/drafts/{draft_id}/approve", summary="批准草稿 → 转为正式 Skill")
+async def approve_draft(
+    draft_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("skill:manage")),
+):
+    from app.domain.skill.evolution import approve_draft as _impl
+    return ok(await _impl(draft_id, user_id=user.user_id), request)
+
+
+@router.post("/drafts/{draft_id}/reject", summary="拒绝草稿")
+async def reject_draft(
+    draft_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("skill:manage")),
+):
+    from app.domain.skill.evolution import reject_draft as _impl
+    return ok(await _impl(draft_id, user_id=user.user_id), request)
+
+
+# ============ Skill 自进化：修订 Review ============
+
+@router.get("/revisions/list", summary="Skill 修订列表（PR-like Review）")
+async def list_revisions(
+    request: Request,
+    skill_id: str = "",
+    status: str = Query("", pattern="^(pending|approved|rejected|auto_merged)$"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: CurrentUser = Depends(require_permission("skill:read")),
+):
+    from app.domain.skill.evolution import list_revisions as _impl
+    items, total = await _impl(skill_id=skill_id, status=status, page=page, page_size=page_size)
+    return ok(paginate(items, total, page, page_size), request)
+
+
+@router.post("/revisions/{revision_id}/approve", summary="批准修订 → 应用到 Skill")
+async def approve_revision(
+    revision_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("skill:manage")),
+):
+    from app.domain.skill.evolution import approve_revision as _impl
+    return ok(await _impl(revision_id, user_id=user.user_id), request)
+
+
+@router.post("/revisions/{revision_id}/reject", summary="拒绝修订")
+async def reject_revision(
+    revision_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("skill:manage")),
+):
+    from app.domain.skill.evolution import reject_revision as _impl
+    return ok(await _impl(revision_id, user_id=user.user_id), request)
+
+
+# ============ Skill 自进化：健康度 & 手动优化 ============
+
+@router.get("/{skill_id}/health", summary="Skill 健康度（成功率/失败率）")
+async def get_skill_health(
+    skill_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("skill:read")),
+):
+    from app.domain.skill.optimizer import get_skill_health as _impl
+    return ok(await _impl(skill_id), request)
+
+
+@router.post("/{skill_id}/optimize", summary="手动触发 Skill 优化")
+async def trigger_optimize(
+    skill_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("skill:manage")),
+):
+    from app.domain.skill.optimizer import check_and_optimize as _impl
+    return ok(await _impl(skill_id), request)
+
+
 def _skill_dict(s) -> dict:
     """ORM 转字典"""
     return {

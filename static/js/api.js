@@ -58,8 +58,9 @@
       }
       return body.data
     } catch (e) {
-      // 网络错误
-      if (e.message === 'Failed to fetch') {
+      // 网络错误：TypeError 是 fetch 网络层的标准异常（跨浏览器兼容）
+      // 不同浏览器 message 不一致（Chrome: "Failed to fetch", Firefox: "NetworkError when attempting to fetch", Safari: "Load failed"）
+      if (e instanceof TypeError || (e.name === 'TypeError')) {
         state.notify('网络连接失败，请检查服务是否启动', 'error')
       }
       throw e
@@ -79,33 +80,82 @@
       body: formData,
       headers: {}  // 让浏览器自动设置 multipart boundary
     }),
-    // SSE 流式订阅（用于 Agent 任务流）
-    streamSSE: (path, onEvent, onError, onClose) => {
+    // SSE 流式订阅（用于 Agent 任务流）— 支持断线自动重连
+    // opts: { maxRetries=5, onReconnect=(attempt, delay, error)=>void, retryDelayMs=1000 }
+    // 返回 cancel 函数：调用后不再重连
+    streamSSE: (path, onEvent, onError, onClose, opts = {}) => {
       const token = getToken()
       const url = BASE_URL + path
-      const ctrl = new AbortController()
-      fetch(url, {
-        headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'text/event-stream' },
-        signal: ctrl.signal
-      }).then(async resp => {
-        const reader = resp.body.getReader()
-        const dec = new TextDecoder()
-        let buf = ''
-        while (true) {
-          const { value, done } = await reader.read()
-          if (done) { onClose && onClose(); break }
-          buf += dec.decode(value, { stream: true })
-          const lines = buf.split('\n')
-          buf = lines.pop()
-          let ev = {}
-          for (const ln of lines) {
-            if (ln.startsWith('event:')) ev.event = ln.slice(6).trim()
-            else if (ln.startsWith('data:')) ev.data = ln.slice(5).trim()
-            else if (ln === '' && ev.event) { onEvent(ev); ev = {} }
+      const maxRetries = opts.maxRetries !== undefined ? opts.maxRetries : 5
+      const baseDelay = opts.retryDelayMs || 1000
+      let ctrl = null
+      let manualAbort = false
+      let retryCount = 0
+      let reconnectTimer = null
+
+      async function connect() {
+        ctrl = new AbortController()
+        try {
+          const resp = await fetch(url, {
+            headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'text/event-stream' },
+            signal: ctrl.signal
+          })
+          // 非 200 直接报错（401/403/404 等不重试）
+          if (!resp.ok) {
+            const err = new Error('SSE_HTTP_' + resp.status)
+            err.status = resp.status
+            throw err
+          }
+          // 重连成功：重置计数
+          if (retryCount > 0) {
+            retryCount = 0
+            opts.onReconnect && opts.onReconnect(0, 0, null)
+          }
+          const reader = resp.body.getReader()
+          const dec = new TextDecoder()
+          let buf = ''
+          while (true) {
+            const { value, done } = await reader.read()
+            if (done) { onClose && onClose(); break }
+            buf += dec.decode(value, { stream: true })
+            const lines = buf.split('\n')
+            buf = lines.pop()
+            let ev = {}
+            for (const ln of lines) {
+              if (ln.startsWith('event:')) ev.event = ln.slice(6).trim()
+              else if (ln.startsWith('data:')) ev.data = ln.slice(5).trim()
+              else if (ln === '' && ev.event) { onEvent(ev); ev = {} }
+            }
+          }
+        } catch (e) {
+          // 手动取消不重连
+          if (manualAbort) return
+          // HTTP 错误（401/403/404）不重试，直接报错
+          if (e.status && e.status >= 400 && e.status < 500) {
+            onError && onError(e)
+            return
+          }
+          // 网络错误：尝试重连（指数退避：1s→2s→4s→8s→16s）
+          if (retryCount < maxRetries) {
+            retryCount++
+            const delay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 16000)
+            opts.onReconnect && opts.onReconnect(retryCount, delay, e)
+            reconnectTimer = setTimeout(() => connect(), delay)
+          } else {
+            // 超过最大重试次数，通知调用方
+            onError && onError(e)
           }
         }
-      }).catch(e => { onError && onError(e) })
-      return () => ctrl.abort()
+      }
+
+      connect()
+
+      // 返回取消函数：设置 manualAbort 阻止重连，并 abort 当前连接
+      return () => {
+        manualAbort = true
+        if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+        if (ctrl) ctrl.abort()
+      }
     }
   }
 

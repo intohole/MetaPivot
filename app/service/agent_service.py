@@ -42,6 +42,28 @@ from app.utils.response import AppError, ErrorCode
 log = get_logger("agent_service")
 
 
+async def _trigger_skill_evolution(task_id: str, status: str) -> None:
+    """Skill 自进化后台触发器（任务完成后异步执行，不阻塞响应）
+
+    - completed → 经验固化（try_solidify_experience）
+    - failed → 失败分析（analyze_failure）
+    异常隔离：任何错误只记日志，不影响主流程。
+    """
+    try:
+        if status == "completed":
+            from app.domain.skill.evolution import try_solidify_experience
+            result = await try_solidify_experience(task_id)
+            if result.get("solidified"):
+                log.info("Skill evolution: solidified task {} → draft {}", task_id, result.get("draft_id"))
+        elif status == "failed":
+            from app.domain.skill.failure_analyzer import analyze_failure
+            result = await analyze_failure(task_id)
+            if result.get("worth_sediment"):
+                log.info("Skill evolution: failure analyzed task {} → draft {}", task_id, result.get("draft_id"))
+    except Exception as e:
+        log.warning("Skill evolution trigger failed for task {}: {}", task_id, e)
+
+
 class AgentService:
     """Agent 服务单例"""
 
@@ -220,6 +242,10 @@ class AgentService:
             record_agent_task(state.status.value, duration)
             await audit_task_result(task_id, user_id, channel, message, state, started_at, request_id)
             asyncio.get_running_loop().call_later(300, stream_manager.cleanup, task_id)
+            # Skill 自进化：任务完成后异步触发经验固化/失败分析（不阻塞响应）
+            asyncio.get_running_loop().create_task(
+                _trigger_skill_evolution(task_id, state.status.value)
+            )
 
     async def _consume_agent(
         self,
@@ -540,6 +566,10 @@ class AgentService:
             agent_task_finished()
             record_agent_task(state.status.value, duration)
             await audit_task_result(task_id, state.user_id, state.channel, state.original_message, state, started_at, request_id)
+            # Skill 自进化：HITL 恢复完成后异步触发经验固化/失败分析（与 _run_task 对称）
+            asyncio.get_running_loop().create_task(
+                _trigger_skill_evolution(task_id, state.status.value)
+            )
 
     # ============ 取消 ============
 

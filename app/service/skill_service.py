@@ -8,6 +8,7 @@
 
 依赖方向：Service → Infra（MCPClient/call_function）+ Data（ORM）
 """
+import asyncio
 from datetime import datetime
 from typing import Optional
 
@@ -20,6 +21,46 @@ from app.utils.metrics import record_skill_call
 from app.utils.response import AppError, ErrorCode
 
 log = get_logger("skill_service")
+
+# 单值截断阈值：超过则截断为 prefix…（避免 args_summary 膨胀 DB）
+_ARG_MAX_LEN = 200
+
+
+def _safe_args_summary(args: dict) -> dict:
+    """脱敏 + 截断 args，生成可持久化的入参摘要
+
+    - 仅保留 JSON 可序列化类型（dict/list/str/num/bool/None）
+    - 单个字符串值超过 _ARG_MAX_LEN 截断
+    - 敏感键（password/token/secret/api_key）脱敏为 ***
+    """
+    if not isinstance(args, dict):
+        return {"_note": "non_dict_args", "type": type(args).__name__}
+    sensitive = {"password", "token", "secret", "api_key", "apikey", "authorization", "cookie"}
+
+    def _sanitize(v):
+        if isinstance(v, dict):
+            return {k: ("***" if k.lower() in sensitive else _sanitize(vv)) for k, vv in v.items()}
+        if isinstance(v, list):
+            return [_sanitize(x) for x in v[:10]]  # 仅保留前 10 项
+        if isinstance(v, str):
+            return v[:_ARG_MAX_LEN] + "…" if len(v) > _ARG_MAX_LEN else v
+        if isinstance(v, (int, float, bool)) or v is None:
+            return v
+        return str(v)[:_ARG_MAX_LEN]  # 兜底转字符串
+
+    try:
+        return {k: ("***" if k.lower() in sensitive else _sanitize(v)) for k, v in args.items()}
+    except Exception:
+        return {"_note": "sanitize_failed"}
+
+
+async def _record_execution_safe(**kwargs) -> None:
+    """fire-and-forget 包装：记录 Skill 执行结果，异常仅记日志不影响主流程"""
+    try:
+        from app.domain.skill.optimizer import record_execution
+        await record_execution(**kwargs)
+    except Exception as e:
+        log.debug("Record execution failed (non-critical): {}", e)
 
 
 class SkillService:
@@ -179,6 +220,12 @@ class SkillService:
             status=skill_status,
         )
         record_skill_call(skill.name, skill_status)
+        # Skill 自进化：记录执行结果供 optimizer 分析（fire-and-forget，不阻塞响应）
+        asyncio.create_task(_record_execution_safe(
+            skill_id=skill_id, skill_name=skill.name, status=skill_status,
+            duration_ms=duration, args_summary=_safe_args_summary(args),
+            error_message=result.get("error", "") if skill_status == "failed" else "",
+        ))
         return result
 
     async def test_skill(self, skill_id: str, args: dict) -> dict:

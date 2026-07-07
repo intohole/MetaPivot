@@ -4,7 +4,10 @@ import asyncio
 from sqlalchemy import text
 
 from app.infra.db.session import async_session_factory, engine, Base
-from app.infra.db.models_user_skill import UserORM, SkillORM, MCPServerORM
+from app.infra.db.models_user_skill import (
+    UserORM, SkillORM, MCPServerORM,
+    SkillExecutionORM, SkillRevisionORM, SkillDraftORM,  # noqa: F401  Skill自进化：确保.metadata 注册建表
+)
 from app.infra.db.models_core import (
     WorkflowORM, WorkflowExecutionORM, AgentTaskORM, AgentTaskStepORM,
     AgentTaskEventORM,

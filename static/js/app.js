@@ -73,6 +73,7 @@
     { path: '/dashboard', label: '仪表盘', component: 'DashboardPage', icon: '📊' },
     { path: '/agent', label: 'Agent 任务', component: 'AgentPage', icon: '🤖' },
     { path: '/skills', label: 'Skill 管理', component: 'SkillsPage', icon: '🧩' },
+    { path: '/skill-review', label: '自进化 Review', component: 'SkillReviewPage', icon: '📝', hideNav: true },
     { path: '/workflows', label: '工作流', component: 'WorkflowsPage', icon: '⚡' },
     { path: '/webhooks', label: 'Webhook', component: 'WebhooksPage', icon: '🔗', roles: ['admin'] },
     { path: '/knowledge', label: '知识库', component: 'KnowledgePage', icon: '📚' },
@@ -233,7 +234,7 @@
   const P = window.Pages || {}
   const pageMap = {
     'LoginPage': P.Login, 'DashboardPage': P.Dashboard, 'AgentPage': P.Agent,
-    'SkillsPage': P.Skills, 'WorkflowsPage': P.Workflows, 'KnowledgePage': P.Knowledge,
+    'SkillsPage': P.Skills, 'SkillReviewPage': P.SkillReview, 'WorkflowsPage': P.Workflows, 'KnowledgePage': P.Knowledge,
     'AuditPage': P.Audit, 'UsersPage': P.Users, 'ChannelsPage': P.Channels,
     'ConfigsPage': P.Configs, 'WebhooksPage': P.Webhooks
   }

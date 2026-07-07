@@ -192,7 +192,8 @@
               <option value="workflow">Workflow</option>
             </select>
             <button class="btn btn-secondary" @click="onSearch">搜索</button>
-            <button v-if="isAdmin" class="btn btn-primary ml-auto" @click="openCreate">+ 新建 Skill</button>
+            <button class="btn btn-ghost ml-auto" @click="state.navigate('/skill-review')" title="草稿与修订审批">📝 自进化 Review</button>
+            <button v-if="isAdmin" class="btn btn-primary" @click="openCreate">+ 新建 Skill</button>
           </div>
         </base-card>
 
