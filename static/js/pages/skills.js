@@ -95,7 +95,9 @@
           }
           showForm.value = false
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('保存 Skill 失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const toggleEnable = async (row) => {
@@ -103,7 +105,9 @@
           await window.API.post('/skills/' + row.id + '/' + (row.enabled ? 'disable' : 'enable'))
           state.notify(row.enabled ? '已禁用' : '已启用', 'success')
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const removeRow = async (row) => {
@@ -116,7 +120,9 @@
           await window.API.del('/skills/' + row.id)
           state.notify('已删除', 'success')
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       // Phase 3: 发布到团队 + scope 切换
@@ -125,7 +131,9 @@
           await window.API.post('/skills/' + row.id + '/publish')
           state.notify('已发布到团队', 'success')
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
       const onScopeChange = (s) => { scope.value = s; page.value = 1; loadList() }
 

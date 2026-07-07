@@ -60,7 +60,9 @@
           state.notify('配置已更新：' + editingKey.value, 'success')
           showEdit.value = false
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const onCategoryChange = () => loadList()

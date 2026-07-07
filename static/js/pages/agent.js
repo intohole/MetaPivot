@@ -32,7 +32,9 @@
         try {
           const res = await window.API.get('/agent/tasks', { page: 1, page_size: 20 })
           history.value = res.items || []
-        } catch (e) {}
+        } catch (e) {
+          state.notify('加载历史失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const scrollToBottom = () => {
@@ -61,6 +63,11 @@
           abortSSE = window.API.streamSSE(streamPath, onSSEEvent, onSSEError, onSSEClose)
         } catch (e) {
           streaming.value = false
+          // 发送失败回滚用户消息，避免"有问无答"困惑
+          const idx = messages.findIndex(m => m.content === msg && m.role === 'user')
+          if (idx >= 0) messages.splice(idx, 1)
+          inputMsg.value = msg  // 回填输入框，方便用户重试
+          state.notify('发送失败：' + (e.message || '未知错误'), 'error')
         }
       }
 
@@ -133,7 +140,13 @@
       }
 
       const onSSEClose = () => {
+        // SSE 连接关闭：若任务未达终态，提示用户连接中断
+        const terminal = ['completed', 'failed', 'cancelled'].includes(taskStatus.value)
         streaming.value = false
+        if (!terminal && currentTaskId.value) {
+          state.notify('实时连接已断开，可在历史中查看任务最终结果', 'warning')
+          loadHistory()  // 刷新历史以获取最终状态
+        }
       }
 
       const handleConfirm = async (decision) => {
@@ -141,7 +154,9 @@
           await window.API.post('/agent/tasks/' + currentTaskId.value + '/confirm', { decision })
           waitingConfirm.value = false
           state.notify('已' + (decision === 'approve' ? '同意' : '拒绝') + '确认', 'success')
-        } catch (e) {}
+        } catch (e) {
+          state.notify('确认操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const cancelTask = async () => {
@@ -153,7 +168,9 @@
           taskStatus.value = 'cancelled'
           state.notify('任务已取消', 'info')
           loadHistory()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('取消任务失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       // Phase 3: 任务完成后快捷动作

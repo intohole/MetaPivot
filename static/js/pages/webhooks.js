@@ -63,7 +63,9 @@
           }
           state.notify('Webhook 创建成功', 'success')
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const copyUrl = async (url) => {
@@ -80,7 +82,9 @@
           await window.API.post('/webhooks/' + hook.token, { message: 'test trigger' })
           state.notify('测试触发已发送', 'success')
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const removeRow = async (row) => {
@@ -89,7 +93,7 @@
           confirmText: '删除', danger: true
         })
         if (action !== 'confirm') return
-        try { await window.API.del('/webhooks/' + row.id); state.notify('已删除', 'success'); loadList() } catch (e) {}
+        try { await window.API.del('/webhooks/' + row.id); state.notify('已删除', 'success'); loadList() } catch (e) { state.notify('删除失败：' + (e.message || '未知错误'), 'error') }
       }
 
       const rotateToken = async (row) => {
@@ -104,7 +108,9 @@
           await copyUrl(`${origin}/api/v1/webhooks/${res.token}`)
           state.notify('Token 已轮换，新 URL 已复制', 'success')
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       onMounted(() => {

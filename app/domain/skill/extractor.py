@@ -64,7 +64,9 @@ async def extract_skill_from_task(task_id: str) -> dict:
     draft = await llm_json_call(SYSTEM_PROMPT, trace_summary, temperature=0.3, max_tokens=800)
     draft["task_id"] = task_id
     draft["step_count"] = len(steps)
-    log.info("Skill extracted from task {}: confidence={}", task_id, draft.get("confidence"))
+    # LLM 偶发漏字段时降级为 0.0，避免 log.info 格式化 None 报错
+    confidence = draft.get("confidence") or 0.0
+    log.info("Skill extracted from task {}: confidence={}", task_id, confidence)
     return draft
 
 

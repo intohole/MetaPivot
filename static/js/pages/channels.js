@@ -79,7 +79,9 @@
           state.notify(editingChannel.value + ' 配置已保存（重启后生效）', 'success')
           showConfig.value = false
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       onMounted(loadList)

@@ -11,7 +11,7 @@
 """
 from typing import Optional
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -62,6 +62,26 @@ class DBMemoryStore:
         except Exception as e:
             log.warning("load_history failed for {}: {}", chat_id, e)
             return []
+
+    async def count_history(self, chat_id: str) -> int:
+        """返回会话消息总数（仅计数，不加载内容）
+
+        用于 _maybe_consolidate 触发条件判断，替代 load_history(limit=大数) + len()，
+        避免 COUNT(*) 全表扫描 vs 加载全部消息内容到内存的开销差异。
+        """
+        if not chat_id:
+            return 0
+        try:
+            async with get_db_session() as session:
+                stmt = (
+                    select(func.count(ChatMessageORM.id))
+                    .where(ChatMessageORM.chat_id == chat_id)
+                )
+                result = await session.execute(stmt)
+                return result.scalar() or 0
+        except Exception as e:
+            log.warning("count_history failed for {}: {}", chat_id, e)
+            return 0
 
     async def append_message(
         self,

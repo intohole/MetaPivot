@@ -46,6 +46,8 @@
           const res = await window.API.get('/workflows', { page: page.value, page_size: pageSize.value, keyword: keyword.value })
           list.value = res.items || []
           total.value = res.total || 0
+        } catch (e) {
+          state.notify('加载工作流列表失败：' + (e.message || '未知错误'), 'error')
         } finally { loading.value = false }
       }
 
@@ -104,7 +106,9 @@
           }
           showForm.value = false
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const removeRow = async (row) => {
@@ -113,7 +117,7 @@
           confirmText: '删除', danger: true
         })
         if (action !== 'confirm') return
-        try { await window.API.del('/workflows/' + row.id); state.notify('已删除', 'success'); loadList() } catch (e) {}
+        try { await window.API.del('/workflows/' + row.id); state.notify('已删除', 'success'); loadList() } catch (e) { state.notify('删除失败：' + (e.message || '未知错误'), 'error') }
       }
 
       const toggleEnabled = async (row) => {
@@ -121,7 +125,9 @@
           await window.API.put('/workflows/' + row.id, { enabled: !row.enabled })
           state.notify(row.enabled ? '已禁用' : '已启用', 'success')
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const openRun = (row) => {
@@ -140,7 +146,9 @@
           const res = await window.API.post('/workflows/' + runWorkflow.value.id + '/execute', { inputs })
           runResult.value = { execution_id: res.execution_id, status: res.status, message: '执行已启动，可点击下方按钮刷新状态' }
           state.notify('工作流已触发', 'success')
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const checkRunStatus = async () => {
@@ -148,7 +156,9 @@
         try {
           const res = await window.API.get('/workflows/executions/' + runResult.value.execution_id)
           runResult.value = { ...runResult.value, status: res.status, current_node: res.current_node, outputs: res.outputs, error: res.error }
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }

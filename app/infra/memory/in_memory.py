@@ -42,6 +42,15 @@ class InMemoryMemoryStore:
             for m in recent
         ]
 
+    async def count_history(self, chat_id: str) -> int:
+        """返回会话消息总数（仅计数，不加载内容）
+
+        用于 _maybe_consolidate 触发条件判断。进程内实现 O(1) len()。
+        注意：_messages 经 _max_per_chat 截断，计数为实际保留条数，
+        与 DB 后端语义一致（均反映当前可读历史长度）。
+        """
+        return len(self._messages.get(chat_id, []))
+
     async def append_message(
         self,
         chat_id: str,

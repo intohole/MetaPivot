@@ -45,7 +45,9 @@
           const res = await window.API.get('/audit/stats', { group_by: statsGroupBy.value })
           stats.value = res.stats || []
           totalCalls.value = res.total || 0
-        } catch (e) {}
+        } catch (e) {
+          state.notify('加载审计数据失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const maxCount = computed(() => Math.max(...stats.value.map(s => s.count), 1))

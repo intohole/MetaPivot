@@ -40,6 +40,14 @@ class IMemoryStore(Protocol):
         """
         ...
 
+    async def count_history(self, chat_id: str) -> int:
+        """返回会话消息总数（用于触发条件判断，避免 load_history 全量加载）
+
+        _maybe_consolidate 等场景需要知道消息总数判断是否达到 interval 倍数，
+        用此方法替代 load_history(limit=大数) + len()，避免加载全部消息内容。
+        """
+        ...
+
     async def append_message(
         self,
         chat_id: str,

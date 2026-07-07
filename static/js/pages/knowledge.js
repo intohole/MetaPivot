@@ -64,7 +64,9 @@
           uploadMeta.description = ''
           uploadMeta.tags = ''
           loadList()
-        } catch (e) {} finally { uploading.value = false }
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        } finally { uploading.value = false }
       }
 
       const removeRow = async (row) => {
@@ -77,7 +79,9 @@
           await window.API.del('/knowledge/documents/' + row.id)
           state.notify('已删除', 'success')
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const runSearch = async () => {
@@ -88,7 +92,9 @@
           })
           searchResults.value = res.results || []
           if (searchResults.value.length === 0) state.notify('未检索到相关内容', 'info')
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }

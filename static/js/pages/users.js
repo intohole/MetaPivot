@@ -49,7 +49,9 @@
         try {
           const res = await window.API.get('/roles')
           roles.value = res.items || []
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const openCreate = () => {
@@ -93,7 +95,9 @@
           }
           showForm.value = false
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const toggleStatus = async (row) => {
@@ -101,7 +105,9 @@
           await window.API.put('/users/' + row.id, { status: row.status === 'active' ? 'disabled' : 'active' })
           state.notify(row.status === 'active' ? '已禁用' : '已启用', 'success')
           loadList()
-        } catch (e) {}
+        } catch (e) {
+          state.notify('操作失败：' + (e.message || '未知错误'), 'error')
+        }
       }
 
       const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }

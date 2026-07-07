@@ -378,9 +378,8 @@ class AgentService:
         consolidate_memories 内部幂等（fact hash 去重），偶发重复触发无副作用。
         """
         try:
-            # 轻量查询当前消息数（limit=1 仅探测存在性，实际计数用大 limit）
-            recent = await self._memory_store.load_history(chat_id, limit=1000)
-            count = len(recent)
+            # 轻量计数（COUNT(*)，避免 load_history 全量加载消息内容到内存）
+            count = await self._memory_store.count_history(chat_id)
             interval = settings.memory_consolidate_interval
             if count > 0 and count % interval == 0:
                 await self._memory_store.consolidate_memories(chat_id)

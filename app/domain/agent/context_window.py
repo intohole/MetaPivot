@@ -90,27 +90,29 @@ def trim_messages(
         msg = rest_msgs[i]
         msg_tokens = token_counter.count_messages_tokens([msg])
 
-        # 如果是 tool 消息，必须找到对应的 assistant tool_calls 消息一并保留
+        # 如果是 tool 消息，必须找到 tool_call_id 匹配的 assistant tool_calls 消息一并保留
         if _is_tool_pair(msg):
-            # 向前查找配对的 assistant tool_calls
-            pair_start = i
+            # OpenAI API 约束：tool 消息的 tool_call_id 必须在某个 assistant tool_calls 中存在
+            # 严格匹配 tool_call_id，避免保留孤立 tool 消息导致 LLM API 报错
             tool_call_id = msg.get("tool_call_id")
+            pair_start = -1  # -1 表示未找到配对
             j = i - 1
             while j >= 0:
                 prev = rest_msgs[j]
                 if _is_assistant_with_tool_calls(prev):
-                    # 检查 tool_call_id 是否匹配
                     call_ids = [tc.get("id") for tc in prev.get("tool_calls", [])]
                     if tool_call_id in call_ids:
                         pair_start = j
                         break
-                    # 同一 assistant 消息可能对应多个 tool 消息，
-                    # 此时 tool_call_id 不匹配但仍是配对，继续向前查找
-                    # 收集所有 tool 消息直到这个 assistant
-                    pair_start = j
-                    break
+                    # tool_call_id 不匹配，继续向前找（可能有多个 assistant tool_calls 消息）
                 j -= 1
-            # 整对保留 [pair_start, i]
+            if pair_start < 0:
+                # 未找到配对的 assistant tool_calls，丢弃孤立 tool 消息
+                # （OpenAI API 要求 tool 消息必须有对应的 tool_calls，否则报错）
+                log.debug("dropped orphan tool message: tool_call_id={}", tool_call_id)
+                i -= 1
+                continue
+            # 整对保留 [pair_start, i]（含中间所有消息，保持顺序完整）
             pair_msgs = rest_msgs[pair_start:i + 1]
             pair_tokens = token_counter.count_messages_tokens(pair_msgs)
             if used + pair_tokens > budget:
