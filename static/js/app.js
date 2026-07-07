@@ -63,6 +63,21 @@
         id: 'action-save-last-task-as-skill', label: '保存最近任务为 Skill', icon: '💾',
         keywords: 'save skill task 录制 沉淀', group: 'actions',
         action: () => { window.AppState.pendingAction = 'save-last-task-as-skill'; window.AppState.navigate('/agent') }
+      },
+      {
+        id: 'action-skill-review', label: 'Skill 自进化 Review', icon: '📝',
+        keywords: 'skill review draft revision 自进化 草稿 审批', group: 'actions',
+        action: () => window.AppState.navigate('/skill-review')
+      },
+      {
+        id: 'action-view-audit', label: '查看审计日志', icon: '📋',
+        keywords: 'audit log 审计 日志', group: 'actions',
+        action: () => window.AppState.navigate('/audit')
+      },
+      {
+        id: 'action-view-configs', label: '系统配置', icon: '⚙️',
+        keywords: 'config settings 配置 系统', group: 'actions',
+        action: () => window.AppState.navigate('/configs')
       }
     ])
   }

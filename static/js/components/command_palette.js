@@ -25,6 +25,7 @@
       const pendingCmd = ref(null)
 
       // 分组计算：无 query 时显示 recent + navigation + actions；有 query 时 fuzzy 过滤
+      // NL 中枢：fuzzy 无匹配时，提供自然语言 fallback（发送给 Agent / 搜索知识库）
       const groups = computed(() => {
         const all = window.Commands ? window.Commands.getAll() : { recent: [], navigation: [], actions: [] }
         const q = query.value.trim().toLowerCase()
@@ -38,7 +39,19 @@
         const flat = [...all.recent, ...all.navigation, ...all.actions]
         const matched = window.fuzzySearch(flat, q, { keys: ['label', 'keywords', 'id'] })
           .map(m => m.item)
-        return matched.length > 0 ? [{ label: '搜索结果', items: matched }] : []
+        if (matched.length > 0) {
+          return [{ label: '搜索结果', items: matched }]
+        }
+        // NL fallback：无匹配时生成自然语言动作建议
+        const origQ = query.value.trim()
+        return [{ label: '自然语言命令', items: [
+          { id: '_nl-agent', label: '发送给 Agent：' + origQ, icon: '🤖',
+            action: () => { state.pendingMessage = origQ; state.navigate('/agent') } },
+          { id: '_nl-knowledge', label: '搜索知识库：' + origQ, icon: '📚',
+            action: () => { state.pendingQuery = origQ; state.navigate('/knowledge') } },
+          { id: '_nl-skill', label: '查找 Skill：' + origQ, icon: '🧩',
+            action: () => { state.pendingAction = 'search-skill:' + origQ; state.navigate('/skills') } }
+        ]}]
       })
 
       // 扁平化所有可见项（用于键盘导航）
@@ -158,7 +171,7 @@
                      :role="inputMode ? 'textbox' : 'combobox'"
                      :aria-expanded="!inputMode" :aria-controls="inputMode ? null : 'cmd-list'"
                      :aria-activedescendant="inputMode ? null : activeId"
-                     :placeholder="inputMode ? (pendingCmd?.inputPrompt || '输入...') : '输入命令或页面名...'"
+                     :placeholder="inputMode ? (pendingCmd?.inputPrompt || '输入...') : '输入命令、页面名，或直接描述你想做的事...'"
                      class="flex-1 bg-transparent outline-none text-ink placeholder-ink-subtle"
                      @keydown="onKeydown" />
               <button v-if="inputMode" class="text-xs text-ink-subtle hover:text-ink" @click="cancelInput" title="返回命令列表">← 返回</button>

@@ -165,6 +165,12 @@
           state.pendingAction = ''
           nextTick(() => openCreate())
         }
+        // NL 中枢：search-skill: 前缀触发搜索
+        if (typeof state.pendingAction === 'string' && state.pendingAction.startsWith('search-skill:')) {
+          keyword.value = state.pendingAction.slice('search-skill:'.length)
+          state.pendingAction = ''
+          onSearch()
+        }
       })
 
       return {
