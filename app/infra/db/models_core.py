@@ -44,6 +44,34 @@ class WorkflowExecutionORM(Base):
     finished_at: Mapped[Optional[datetime]] = mapped_column(default=None)
 
 
+class WorkflowTemplateORM(Base):
+    """工作流模板 — 团队 SOP 可复用模式
+
+    场景：将高频办公自动化场景（每日站会提醒/周报生成/知识库查询+总结）沉淀为模板，
+    用户一键实例化为 WorkflowORM，降低工作流创建门槛。
+    instantiate 时基于 definition + trigger_template 创建 WorkflowORM，usage_count += 1。
+    """
+    __tablename__ = "workflow_templates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    # 分类：daily/weekly/report/notification/communication 等，便于 Gallery 筛选
+    category: Mapped[str] = mapped_column(String(64), default="general", nullable=False, index=True)
+    # DAG 定义 {nodes, edges, variables}（与 WorkflowORM.definition 同构）
+    definition: Mapped[dict] = mapped_column(JSON, nullable=False)
+    # 触发器模板：实例化时用户可覆盖（如 cron_expr、webhook 配置）
+    trigger_template: Mapped[dict] = mapped_column(JSON, default=dict)
+    # 输入参数 schema（JSON Schema），实例化时引导用户填写
+    input_schema: Mapped[dict] = mapped_column(JSON, default=dict)
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    visibility: Mapped[str] = mapped_column(String(20), default="public", nullable=False)  # public/private
+    created_by: Mapped[Optional[str]] = mapped_column(String(36))
+    usage_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
 class AgentTaskORM(Base):
     """Agent任务表"""
     __tablename__ = "agent_tasks"

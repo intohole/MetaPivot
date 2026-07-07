@@ -14,6 +14,7 @@
       { id: 'nav-agent', label: 'Agent 任务', icon: '🤖', path: '/agent', keywords: 'agent 任务 对话', group: 'navigation', shortcut: 'g a' },
       { id: 'nav-skills', label: 'Skill 管理', icon: '🧩', path: '/skills', keywords: 'skill 技能 mcp', group: 'navigation', shortcut: 'g s' },
       { id: 'nav-workflows', label: '工作流', icon: '⚡', path: '/workflows', keywords: 'workflow 工作流 flow', group: 'navigation', shortcut: 'g w' },
+      { id: 'nav-templates', label: '模板库', icon: '🗂️', path: '/templates', keywords: 'template 模板 sop', group: 'navigation', shortcut: 'g t' },
       { id: 'nav-knowledge', label: '知识库', icon: '📚', path: '/knowledge', keywords: 'knowledge 知识 文档', group: 'navigation', shortcut: 'g k' },
       { id: 'nav-channels', label: 'IM 渠道', icon: '💬', path: '/channels', keywords: 'channel 渠道 钉钉 企微 飞书', group: 'navigation', shortcut: 'g c' }
     ]
@@ -90,6 +91,7 @@
     { path: '/skills', label: 'Skill 管理', component: 'SkillsPage', icon: '🧩' },
     { path: '/skill-review', label: '自进化 Review', component: 'SkillReviewPage', icon: '📝', hideNav: true },
     { path: '/workflows', label: '工作流', component: 'WorkflowsPage', icon: '⚡' },
+    { path: '/templates', label: '模板库', component: 'TemplatesPage', icon: '🗂️' },
     { path: '/webhooks', label: 'Webhook', component: 'WebhooksPage', icon: '🔗', roles: ['admin'] },
     { path: '/knowledge', label: '知识库', component: 'KnowledgePage', icon: '📚' },
     { path: '/audit', label: '审计日志', component: 'AuditPage', icon: '📋', roles: ['admin', 'manager'] },
@@ -249,7 +251,7 @@
   const P = window.Pages || {}
   const pageMap = {
     'LoginPage': P.Login, 'DashboardPage': P.Dashboard, 'AgentPage': P.Agent,
-    'SkillsPage': P.Skills, 'SkillReviewPage': P.SkillReview, 'WorkflowsPage': P.Workflows, 'KnowledgePage': P.Knowledge,
+    'SkillsPage': P.Skills, 'SkillReviewPage': P.SkillReview, 'WorkflowsPage': P.Workflows, 'TemplatesPage': P.Templates, 'KnowledgePage': P.Knowledge,
     'AuditPage': P.Audit, 'UsersPage': P.Users, 'ChannelsPage': P.Channels,
     'ConfigsPage': P.Configs, 'WebhooksPage': P.Webhooks
   }

@@ -163,6 +163,7 @@
 
       const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }
       const onSearch = () => { page.value = 1; loadList() }
+      const goTemplates = () => state.navigate('/templates')
 
       onMounted(() => {
         loadList()
@@ -177,7 +178,7 @@
         showForm, editingId, form, isAdmin, editorMode, wfContainer, wfPalette,
         showRun, runWorkflow, runInputs, runResult,
         loadList, openCreate, openEdit, submitForm, removeRow, toggleEnabled,
-        openRun, executeRun, checkRunStatus, onPageChange, onSearch, state,
+        openRun, executeRun, checkRunStatus, onPageChange, onSearch, goTemplates, state,
         SkillActions: window.SkillActions
       }
     },
@@ -187,7 +188,10 @@
           <div class="flex flex-wrap gap-3 items-center">
             <input v-model="keyword" type="text" class="input flex-1 min-w-[200px]" placeholder="搜索工作流名称" @keydown.enter="onSearch" aria-label="搜索" />
             <button class="btn btn-secondary" @click="onSearch">搜索</button>
-            <button v-if="isAdmin" class="btn btn-primary ml-auto" @click="openCreate">+ 新建工作流</button>
+            <div class="ml-auto flex gap-2">
+              <button class="btn btn-secondary" @click="goTemplates" title="从 SOP 模板一键创建">🗂️ 从模板创建</button>
+              <button v-if="isAdmin" class="btn btn-primary" @click="openCreate">+ 新建工作流</button>
+            </div>
           </div>
         </base-card>
 

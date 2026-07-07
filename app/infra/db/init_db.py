@@ -9,8 +9,8 @@ from app.infra.db.models_user_skill import (
     SkillExecutionORM, SkillRevisionORM, SkillDraftORM,  # noqa: F401  Skill自进化：确保.metadata 注册建表
 )
 from app.infra.db.models_core import (
-    WorkflowORM, WorkflowExecutionORM, AgentTaskORM, AgentTaskStepORM,
-    AgentTaskEventORM,
+    WorkflowORM, WorkflowExecutionORM, WorkflowTemplateORM,
+    AgentTaskORM, AgentTaskStepORM, AgentTaskEventORM,
     AuditLogORM, KnowledgeDocumentORM, IMChatORM, IMMessageORM, ConfigORM,
     ChatMessageORM, ChatSummaryORM, ScheduledTaskORM,
 )
@@ -31,6 +31,7 @@ async def init_db() -> None:
     await seed_admin_user()
     await seed_default_skills()
     await seed_configs()
+    await seed_workflow_templates()
 
 
 async def seed_admin_user() -> None:
@@ -122,6 +123,131 @@ async def seed_configs() -> None:
             session.add(ConfigORM(key=key, value=value, category=category, description=desc, updatable=True))
         await session.commit()
     log.info("Default configs seeded")
+
+
+async def seed_workflow_templates() -> None:
+    """初始化 SOP 工作流模板库
+
+    沉淀高频办公自动化场景，用户一键实例化为工作流。
+    模板覆盖：日常通知/知识检索/周报生成 三类典型 SOP。
+    """
+    # 复用 knowledge_search skill 的 id 引用：实例化后用户可在编辑器替换为实际 skill_id
+    templates = [
+        {
+            "name": "每日站会提醒",
+            "description": "工作日每天 10:00 向指定群发送站会提醒消息，含议程模板。",
+            "category": "daily",
+            "definition": {
+                "nodes": [
+                    {"id": "n_start", "type": "start", "config": {}},
+                    {"id": "n_msg", "type": "send_message", "config": {
+                        "channel": "api",
+                        "text": "📅 每日站会提醒\n\n各位同学，今天 10:30 开始站会，请准备：\n1. 昨日完成事项\n2. 今日计划事项\n3. 阻塞/风险\n\n议题：${agenda}",
+                    }},
+                    {"id": "n_end", "type": "end", "config": {}},
+                ],
+                "edges": [
+                    {"source": "n_start", "target": "n_msg"},
+                    {"source": "n_msg", "target": "n_end"},
+                ],
+                "variables": [],
+            },
+            "trigger_template": {"type": "schedule", "cron_expr": "0 10 * * 1-5"},
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "agenda": {"type": "string", "description": "今日议程", "default": "常规同步"},
+                    "chat_id": {"type": "string", "description": "目标群聊ID"},
+                },
+                "required": ["chat_id"],
+            },
+            "tags": ["站会", "提醒", "日常"],
+        },
+        {
+            "name": "知识库查询",
+            "description": "在企业知识库检索关键词，返回匹配文档片段。手动触发，适合按需查询。",
+            "category": "general",
+            "definition": {
+                "nodes": [
+                    {"id": "n_start", "type": "start", "config": {}},
+                    {"id": "n_search", "type": "skill_call", "config": {
+                        "skill_id": "knowledge_search",
+                        "args": {"query": "${query}", "top_k": 5},
+                    }},
+                    {"id": "n_end", "type": "end", "config": {}},
+                ],
+                "edges": [
+                    {"source": "n_start", "target": "n_search"},
+                    {"source": "n_search", "target": "n_end"},
+                ],
+                "variables": [],
+            },
+            "trigger_template": {"type": "manual"},
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "检索关键词"},
+                },
+                "required": ["query"],
+            },
+            "tags": ["知识库", "检索", "RAG"],
+        },
+        {
+            "name": "周报生成",
+            "description": "每周五 18:00 基于本周工作摘要生成周报并发送到指定群。",
+            "category": "weekly",
+            "definition": {
+                "nodes": [
+                    {"id": "n_start", "type": "start", "config": {}},
+                    {"id": "n_llm", "type": "llm_call", "config": {
+                        "system": "你是企业办公助手，擅长撰写结构清晰的周报。",
+                        "prompt": "请根据以下本周工作摘要，生成一份周报，包含【本周成果】【下周计划】【风险与阻塞】三部分：\n\n${week_summary}",
+                    }},
+                    {"id": "n_msg", "type": "send_message", "config": {
+                        "channel": "api",
+                        "text": "📋 本周周报\n\n${llm_content}",
+                    }},
+                    {"id": "n_end", "type": "end", "config": {}},
+                ],
+                "edges": [
+                    {"source": "n_start", "target": "n_llm"},
+                    {"source": "n_llm", "target": "n_msg"},
+                    {"source": "n_msg", "target": "n_end"},
+                ],
+                "variables": [],
+            },
+            "trigger_template": {"type": "schedule", "cron_expr": "0 18 * * 5"},
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "week_summary": {"type": "string", "description": "本周工作摘要文本"},
+                    "chat_id": {"type": "string", "description": "目标群聊ID"},
+                },
+                "required": ["week_summary", "chat_id"],
+            },
+            "tags": ["周报", "汇报", "自动化"],
+        },
+    ]
+    async with async_session_factory() as session:
+        for tpl_data in templates:
+            exists = await session.execute(
+                text("SELECT 1 FROM workflow_templates WHERE name = :name"),
+                {"name": tpl_data["name"]},
+            )
+            if exists.scalar():
+                continue
+            session.add(WorkflowTemplateORM(
+                name=tpl_data["name"],
+                description=tpl_data["description"],
+                category=tpl_data["category"],
+                definition=tpl_data["definition"],
+                trigger_template=tpl_data["trigger_template"],
+                input_schema=tpl_data["input_schema"],
+                tags=tpl_data["tags"],
+                visibility="public",
+            ))
+        await session.commit()
+    log.info("Workflow templates seeded: {}", [t["name"] for t in templates])
 
 
 if __name__ == "__main__":
