@@ -15,6 +15,7 @@
       const waitingConfirm = ref(false)
       const history = ref([])
       const streaming = ref(false)
+      const streamingText = ref('')  // 流式 reply 累积文本（token 事件拼接）
       const chatBox = ref(null)
       let abortSSE = null  // SSE 订阅取消函数
 
@@ -44,6 +45,7 @@
         messages.push({ role: 'user', content: msg, time: new Date().toLocaleTimeString() })
         inputMsg.value = ''
         streaming.value = true
+        streamingText.value = ''
         taskStatus.value = 'pending'
         taskSteps.length = 0
 
@@ -62,49 +64,56 @@
         }
       }
 
-      // SSE 事件处理 — 各事件类型参考 llms.txt
+      // 通用：事件 → trace step（live SSE + replay 共用，消除重复）
+      const pushStep = (type, d) => {
+        switch (type) {
+          case 'step_completed':
+            if (d.step) taskSteps.push({ type: 'step', step: String(d.step).replace(/_\d+$/, ''), result: d.result, duration_ms: d.duration_ms || 0 })
+            break
+          case 'llm_call':
+            taskSteps.push({ type: 'llm', duration_ms: d.duration_ms || 0, tokens: (d.usage && d.usage.total_tokens) || 0, result: d.usage })
+            break
+          case 'tool_call':
+            if (d.status === 'started') {
+              taskSteps.push({ type: 'tool', tool: d.tool, args: d.args, status: 'started' })
+            } else {
+              const last = [...taskSteps].reverse().find(s => s.type === 'tool' && s.tool === d.tool && s.status === 'started')
+              if (last) { last.status = d.status; last.result = d.result; last.error = d.error; last.duration_ms = d.duration_ms || 0 }
+              else taskSteps.push({ type: 'tool', tool: d.tool, args: d.args, status: d.status, result: d.result, error: d.error })
+            }
+            break
+          case 'tool_blocked': taskSteps.push({ type: 'blocked', tool: d.tool, reason: d.reason }); break
+          case 'context_trimmed': taskSteps.push({ type: 'trimmed', before: d.before, after: d.after }); break
+          case 'reflected': taskSteps.push({ type: 'reflected', thought: d.correction_hint || d.thought }); break
+        }
+        scrollToBottom()
+      }
+
+      // SSE 事件处理 — 全事件消费（消除 agent 黑盒）
       const onSSEEvent = (ev) => {
         let data = {}
         try { data = JSON.parse(ev.data || '{}') } catch (e) { data = {} }
         switch (ev.event) {
-          case 'step_started':
-            taskStatus.value = 'executing'
-            break
-          case 'step_completed':
-            taskStatus.value = 'executing'
-            break
-          case 'tool_call':
-            // {tool, args, status: started/completed/failed, result/error}
-            taskSteps.push({
-              action: 'tool_call',
-              tool: data.tool,
-              status: data.status,
-              summary: data.status === 'started' ? '调用 ' + data.tool
-                     : data.status === 'completed' ? '✓ ' + data.tool
-                     : '✗ ' + data.tool,
-              detail: data.error || '',
-            })
-            scrollToBottom()
-            break
-          case 'human_confirm_required':
-            waitingConfirm.value = true
-            taskStatus.value = 'waiting_confirm'
-            break
+          case 'step_started': taskStatus.value = 'executing'; break
+          case 'step_completed': taskStatus.value = 'executing'; pushStep('step_completed', data); break
+          case 'llm_call': pushStep('llm_call', data); break
+          case 'tool_call': pushStep('tool_call', data); break
+          case 'tool_blocked': pushStep('tool_blocked', data); break
+          case 'context_trimmed': pushStep('context_trimmed', data); break
+          case 'reflected': pushStep('reflected', data); break
+          case 'token': streamingText.value += data.text || ''; scrollToBottom(); break
+          case 'human_confirm_required': waitingConfirm.value = true; taskStatus.value = 'waiting_confirm'; break
           case 'final_result':
-            streaming.value = false
-            taskStatus.value = 'completed'
-            if (data.content || data.answer) {
-              messages.push({ role: 'assistant', content: data.content || data.answer, time: new Date().toLocaleTimeString() })
-            }
-            scrollToBottom()
-            loadHistory()
+            streaming.value = false; taskStatus.value = 'completed'
+            const answer = streamingText.value || data.content || data.answer || ''
+            if (answer) messages.push({ role: 'assistant', content: answer, time: new Date().toLocaleTimeString() })
+            streamingText.value = ''; scrollToBottom(); loadHistory()
+            showPostActions.value = true  // Phase 3: 任务完成后快捷动作
             break
           case 'error':
-            streaming.value = false
-            taskStatus.value = 'failed'
+            streaming.value = false; taskStatus.value = 'failed'
             messages.push({ role: 'assistant', content: '⚠️ 任务失败：' + (data.message || '未知错误'), time: new Date().toLocaleTimeString() })
-            scrollToBottom()
-            loadHistory()
+            streamingText.value = ''; scrollToBottom(); loadHistory()
             break
           case 'cancelled':
           case 'stream_end':
@@ -112,12 +121,11 @@
             if (taskStatus.value !== 'failed') taskStatus.value = taskStatus.value || 'completed'
             loadHistory()
             break
-          default:
-            // intent_completed / planning_completed / reflected / hitl_paused / token 等
-            if (ev.event) taskSteps.push({ action: ev.event, summary: '', detail: '' })
-            break
         }
       }
+
+      // replay API 事件 → trace step（任务历史回放用）
+      const replayEventToStep = (e) => pushStep(e.event_type, e.event_data || {})
 
       const onSSEError = (e) => {
         streaming.value = false
@@ -148,21 +156,65 @@
         } catch (e) {}
       }
 
-      const viewHistory = (row) => {
+      // Phase 3: 任务完成后快捷动作
+      const showPostActions = ref(false)
+      const saveAsSkill = async () => {
+        if (!currentTaskId.value) return
+        const saved = await window.SkillActions.extractAndSave(currentTaskId.value, state)
+        if (saved) showPostActions.value = false
+      }
+      const rerunTask = () => {
+        const lastMsg = messages.filter(m => m.role === 'user').pop()
+        if (lastMsg) inputMsg.value = lastMsg.content; showPostActions.value = false
+      }
+
+      // 任务历史回放：调 replay API 加载完整事件流 → 渲染轨迹
+      const viewHistory = async (row) => {
         currentTaskId.value = row.task_id
         taskStatus.value = row.status
         messages.length = 0
-        if (row.result?.content || row.result?.answer) {
-          messages.push({ role: 'assistant', content: row.result.content || row.result.answer, time: row.created_at })
+        taskSteps.length = 0
+        streamingText.value = ''
+        try {
+          const res = await window.API.get('/agent/tasks/' + row.task_id + '/replay')
+          const task = res.task || {}
+          if (task.original_message) {
+            messages.push({ role: 'user', content: task.original_message, time: (task.created_at || '').slice(11, 19) })
+          }
+          const answer = (task.result && (task.result.content || task.result.answer)) || ''
+          if (answer) {
+            messages.push({ role: 'assistant', content: answer, time: (task.finished_at || '').slice(11, 19) })
+          }
+          ;(res.events || []).forEach(replayEventToStep)
+        } catch (e) {
+          // 降级：只显示最终结果
+          if (row.result && (row.result.content || row.result.answer)) {
+            messages.push({ role: 'assistant', content: row.result.content || row.result.answer, time: row.created_at })
+          }
         }
       }
 
-      onMounted(loadHistory)
+      onMounted(async () => {
+        await loadHistory()
+        if (state.pendingMessage) {
+          inputMsg.value = state.pendingMessage; state.pendingMessage = ''
+          nextTick(() => sendMessage())
+        }
+        // Phase 3: Command Palette 联动 — 保存最近任务为 Skill
+        if (state.pendingAction === 'save-last-task-as-skill') {
+          state.pendingAction = ''
+          if (history.value.length > 0) {
+            currentTaskId.value = history.value[0].task_id
+            nextTick(() => saveAsSkill())
+          }
+        }
+      })
 
       return {
         messages, inputMsg, currentTaskId, taskStatus, taskSteps, waitingConfirm,
-        history, streaming, canSend, chatBox, columns, renderMarkdown,
-        sendMessage, handleConfirm, cancelTask, viewHistory, state
+        history, streaming, streamingText, canSend, chatBox, columns, renderMarkdown,
+        sendMessage, handleConfirm, cancelTask, viewHistory, state,
+        showPostActions, saveAsSkill, rerunTask
       }
     },
     template: `
@@ -193,15 +245,17 @@
               </div>
             </div>
 
-            <!-- 执行步骤（含 tool_call 实时状态） -->
-            <details v-if="taskSteps.length > 0" class="mb-3">
-              <summary class="cursor-pointer text-sm text-ink-muted">执行步骤 ({{ taskSteps.length }})</summary>
-              <ol class="mt-2 space-y-1 text-xs text-ink-muted pl-4">
-                <li v-for="(s, i) in taskSteps" :key="i" class="list-decimal">
-                  <span class="font-medium">{{ s.action || s.type }}</span>: {{ s.summary || s.detail || '' }}
-                </li>
-              </ol>
-            </details>
+            <!-- 执行轨迹（结构化时间线，消除黑盒） -->
+            <div data-tour="agent-trace">
+              <agent-trace :steps="taskSteps" :streaming-text="streamingText" :streaming="streaming" />
+            </div>
+
+            <!-- Phase 3: 任务完成后快捷动作条 -->
+            <div v-if="showPostActions && taskStatus === 'completed'" class="flex gap-2 mb-3">
+              <button class="btn btn-secondary text-sm" @click="saveAsSkill">💾 保存为 Skill</button>
+              <button class="btn btn-ghost text-sm" @click="rerunTask">🔄 重新发起</button>
+              <button class="btn btn-ghost text-sm" @click="showPostActions = false">关闭</button>
+            </div>
 
             <!-- HITL 确认 -->
             <div v-if="waitingConfirm" class="card p-3 mb-3 bg-amber-50 border-amber-200">

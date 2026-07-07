@@ -19,6 +19,11 @@
   // 路由状态：hash 路由 #/page
   const currentRoute = ref(window.location.hash.slice(1) || '/dashboard')
 
+  // Command Palette 联动：跨页面传递待执行动作（参数化命令 → 目标页面消费）
+  const pendingMessage = ref('')   // 发起 agent 任务（/agent 消费）
+  const pendingAction = ref('')    // 创建动作（/skills|/workflows|/knowledge 消费，如 'create-skill'）
+  const pendingQuery = ref('')     // 查询动作（/knowledge 消费）
+
   // Round 4: 主题状态（light/dark），localStorage 持久化
   const theme = ref(localStorage.getItem('metapivot_theme') || 'light')
   function toggleTheme() {
@@ -124,7 +129,8 @@
     setAuth, logout, restoreAuth,
     notify, dismissToast,
     navigate, hasRole,
-    startLoading, stopLoading
+    startLoading, stopLoading,
+    pendingMessage, pendingAction, pendingQuery
   }
 
   // 启动时恢复登录态

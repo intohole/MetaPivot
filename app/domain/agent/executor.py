@@ -89,6 +89,61 @@ async def execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
             token_usage={"total_tokens": sub_result.get("tokens", 0)},
         )
 
+    # Phase 2 Bundle B: workflow 内置工具（trigger_workflow / list_workflows）
+    # 不经过 skill_service，避免污染业务工具；配合 cycle_detector 防循环死锁
+    if tool_name == "trigger_workflow":
+        from app.domain.workflow.cycle_detector import should_block, push_id, describe_stack
+        from app.service.workflow_service import workflow_service
+        workflow_id = args.get("workflow_id", "")
+        inputs = args.get("inputs", {})
+        exec_stack = state.context.get("__exec_stack", [])
+        blocked, reason = should_block(exec_stack, workflow_id)
+        if blocked:
+            state.add_event("tool_blocked", {"tool": tool_name, "reason": reason})
+            return StepRecord(
+                step_index=state.current_step, step_name="blocked_trigger_workflow",
+                tool_name=tool_name, tool_input=args, status="failed",
+                error=reason, tool_output={"error": reason, "blocked": True},
+                duration_ms=int((datetime.now() - started).total_seconds() * 1000),
+            )
+        try:
+            result = await workflow_service.execute_workflow(
+                workflow_id=workflow_id, inputs=inputs,
+                chat_id=state.chat_id, user_id=state.user_id,
+                exec_stack=push_id(exec_stack, workflow_id),
+            )
+            return StepRecord(
+                step_index=state.current_step, step_name="call_trigger_workflow",
+                tool_name=tool_name, tool_input=args, status="success",
+                tool_output=result, duration_ms=int((datetime.now() - started).total_seconds() * 1000),
+            )
+        except Exception as e:
+            log.exception("trigger_workflow failed: {}", e)
+            return StepRecord(
+                step_index=state.current_step, step_name="call_trigger_workflow",
+                tool_name=tool_name, tool_input=args, status="failed",
+                error=str(e), tool_output={"error": str(e)},
+                duration_ms=int((datetime.now() - started).total_seconds() * 1000),
+            )
+    if tool_name == "list_workflows":
+        from app.service.workflow_service import workflow_service
+        try:
+            items, _ = await workflow_service.list_workflows(enabled=True)
+            workflows = [{"id": w.id, "name": w.name, "description": w.description} for w in items]
+            return StepRecord(
+                step_index=state.current_step, step_name="call_list_workflows",
+                tool_name=tool_name, tool_input=args, status="success",
+                tool_output={"workflows": workflows, "total": len(workflows)},
+                duration_ms=int((datetime.now() - started).total_seconds() * 1000),
+            )
+        except Exception as e:
+            return StepRecord(
+                step_index=state.current_step, step_name="call_list_workflows",
+                tool_name=tool_name, tool_input=args, status="failed",
+                error=str(e), tool_output={"error": str(e)},
+                duration_ms=int((datetime.now() - started).total_seconds() * 1000),
+            )
+
     step = StepRecord(
         step_index=state.current_step, step_name=f"call_{tool_name}",
         tool_name=tool_name, tool_input=args, status="running",

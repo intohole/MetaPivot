@@ -30,22 +30,36 @@ class WorkflowService:
     # ============ CRUD ============
 
     async def create_workflow(self, data: dict, created_by: str = "") -> dict:
-        # 校验 DAG 合法性
         WorkflowDefinition(data["definition"])
+        from app.domain.workflow.trigger_spec import parse_trigger
+        trigger_spec = parse_trigger(data.get("trigger"))
+        trigger_dict = trigger_spec.to_dict()
+
         async with get_db_session() as session:
             wf = WorkflowORM(
-                name=data["name"],
-                description=data.get("description", ""),
-                definition=data["definition"],
-                trigger=data.get("trigger", {}),
-                enabled=data.get("enabled", True),
-                created_by=created_by or None,
+                name=data["name"], description=data.get("description", ""),
+                definition=data["definition"], trigger=trigger_dict,
+                enabled=data.get("enabled", True), created_by=created_by or None,
             )
             session.add(wf)
             await session.flush()
+            # Phase 2: webhook 类型自动创建关联 WebhookORM，回填 token
+            if trigger_spec.type == "webhook":
+                try:
+                    from app.service.webhook_service import webhook_service
+                    hook = await webhook_service.create_webhook(
+                        name=f"workflow:{wf.name}", target_type="workflow",
+                        target_id=wf.id, created_by=created_by,
+                    )
+                    trigger_dict["webhook_token"] = hook["token"]
+                    wf.trigger = trigger_dict
+                    await session.flush()
+                except Exception as e:
+                    log.warning("auto-create webhook for workflow {} failed: {}", wf.id, e)
             log.info("Workflow created: {} ({})", wf.name, wf.id)
             return {
                 "id": wf.id, "name": wf.name, "status": "created",
+                "trigger": trigger_dict,
                 "created_at": wf.created_at.isoformat() if wf.created_at else None,
             }
 
@@ -83,6 +97,10 @@ class WorkflowService:
             if "definition" in update_data:
                 WorkflowDefinition(update_data["definition"])
                 wf.version += 1
+            # Phase 2: trigger 变更时重新校验
+            if "trigger" in update_data:
+                from app.domain.workflow.trigger_spec import parse_trigger
+                update_data["trigger"] = parse_trigger(update_data["trigger"]).to_dict()
             for k, v in update_data.items():
                 if hasattr(wf, k) and v is not None:
                     setattr(wf, k, v)
@@ -105,30 +123,28 @@ class WorkflowService:
         inputs: dict,
         chat_id: str = "",
         user_id: str = "",
+        exec_stack: Optional[list] = None,
     ) -> dict:
-        """触发工作流执行（异步推进 DAG）"""
+        """触发工作流执行（异步推进 DAG）。exec_stack 用于 Phase 2 循环检测。"""
         wf = await self.get_workflow(workflow_id)
         if not wf.enabled:
             raise AppError(ErrorCode.WORKFLOW_INVALID, "工作流已禁用", 400)
 
-        # 创建执行实例
         async with get_db_session() as session:
             execution = WorkflowExecutionORM(
-                workflow_id=workflow_id,
-                status="running",
-                inputs=inputs,
-                triggered_by=user_id or None,
-                trigger_channel="api",
-                chat_id=chat_id or None,
-                current_node="",
+                workflow_id=workflow_id, status="running", inputs=inputs,
+                triggered_by=user_id or None, trigger_channel="api",
+                chat_id=chat_id or None, current_node="",
             )
             session.add(execution)
             await session.flush()
             execution_id = execution.id
 
-        # 异步推进（不阻塞调用方）
         import asyncio
-        bg = asyncio.create_task(self._run_execution(execution_id, wf.definition, inputs, chat_id, user_id))
+        bg = asyncio.create_task(self._run_execution(
+            execution_id, wf.definition, inputs, chat_id, user_id,
+            workflow_id=workflow_id, exec_stack=exec_stack,
+        ))
         self._running_tasks[execution_id] = bg
         bg.add_done_callback(lambda t: self._running_tasks.pop(execution_id, None))
         return {"execution_id": execution_id, "status": "pending"}
@@ -166,6 +182,7 @@ class WorkflowService:
         bg = asyncio.create_task(self._run_execution(
             execution_id, wf.definition, ex.inputs, ex.chat_id or "", ex.triggered_by or "",
             resume_from=ex.current_node, context_mod=modifications,
+            workflow_id=ex.workflow_id,
         ))
         self._running_tasks[execution_id] = bg
         bg.add_done_callback(lambda t: self._running_tasks.pop(execution_id, None))
@@ -182,6 +199,8 @@ class WorkflowService:
         user_id: str,
         resume_from: Optional[str] = None,
         context_mod: Optional[dict] = None,
+        workflow_id: str = "",
+        exec_stack: Optional[list] = None,
     ) -> None:
         """异步推进工作流执行"""
         final_status = "failed"
@@ -193,6 +212,8 @@ class WorkflowService:
                 "variables": dict(inputs),
                 "outputs": {},
                 "__adj": wf_def.adj,
+                "__current_workflow_id": workflow_id,
+                "__exec_stack": exec_stack if exec_stack is not None else [],
             }
             if context_mod:
                 context["variables"].update(context_mod)

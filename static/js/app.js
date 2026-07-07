@@ -31,6 +31,40 @@
       id: 'action-theme', label: '切换主题', icon: '🌙', keywords: 'theme dark light 主题 暗色', group: 'actions',
       action: () => window.AppState.toggleTheme()
     })
+    // Phase 1 Bundle A：全局中枢动作命令（参数化命令用 inputPrompt 标记）
+    window.Commands.registerActions([
+      {
+        id: 'action-agent-task', label: '发起 Agent 任务', icon: '🤖', keywords: 'agent task 对话 发起 ask', group: 'actions',
+        inputPrompt: '输入 Agent 任务消息...',
+        action: (msg) => { window.AppState.pendingMessage = msg; window.AppState.navigate('/agent') }
+      },
+      {
+        id: 'action-create-skill', label: '新建 Skill', icon: '🧩', keywords: 'create skill 新建 创建 技能', group: 'actions',
+        action: () => { window.AppState.pendingAction = 'create-skill'; window.AppState.navigate('/skills') }
+      },
+      {
+        id: 'action-create-workflow', label: '新建工作流', icon: '⚡', keywords: 'create workflow 新建 创建 工作流', group: 'actions',
+        action: () => { window.AppState.pendingAction = 'create-workflow'; window.AppState.navigate('/workflows') }
+      },
+      {
+        id: 'action-create-knowledge', label: '上传知识文档', icon: '📚', keywords: 'create knowledge upload 上传 知识 文档', group: 'actions',
+        action: () => { window.AppState.pendingAction = 'create-knowledge'; window.AppState.navigate('/knowledge') }
+      },
+      {
+        id: 'action-query-knowledge', label: '查询知识库', icon: '🔍', keywords: 'search knowledge query 查询 检索 知识', group: 'actions',
+        inputPrompt: '输入知识查询关键词...',
+        action: (q) => { window.AppState.pendingQuery = q; window.AppState.navigate('/knowledge') }
+      },
+      {
+        id: 'action-create-webhook', label: '新建 Webhook', icon: '🔗', keywords: 'create webhook 新建 触发器', group: 'actions',
+        action: () => { window.AppState.pendingAction = 'create-webhook'; window.AppState.navigate('/webhooks') }
+      },
+      {
+        id: 'action-save-last-task-as-skill', label: '保存最近任务为 Skill', icon: '💾',
+        keywords: 'save skill task 录制 沉淀', group: 'actions',
+        action: () => { window.AppState.pendingAction = 'save-last-task-as-skill'; window.AppState.navigate('/agent') }
+      }
+    ])
   }
 
   /* === 路由配置 === */
@@ -40,6 +74,7 @@
     { path: '/agent', label: 'Agent 任务', component: 'AgentPage', icon: '🤖' },
     { path: '/skills', label: 'Skill 管理', component: 'SkillsPage', icon: '🧩' },
     { path: '/workflows', label: '工作流', component: 'WorkflowsPage', icon: '⚡' },
+    { path: '/webhooks', label: 'Webhook', component: 'WebhooksPage', icon: '🔗', roles: ['admin'] },
     { path: '/knowledge', label: '知识库', component: 'KnowledgePage', icon: '📚' },
     { path: '/audit', label: '审计日志', component: 'AuditPage', icon: '📋', roles: ['admin', 'manager'] },
     { path: '/users', label: '用户管理', component: 'UsersPage', icon: '👥', roles: ['admin'] },
@@ -145,6 +180,9 @@
                 <button class="btn btn-ghost p-2" @click="state.toggleTheme" :aria-label="state.theme.value === 'light' ? '切换暗色模式' : '切换亮色模式'" title="切换主题">
                   <span aria-hidden="true">{{ state.theme.value === 'light' ? '🌙' : '☀️' }}</span>
                 </button>
+                <button class="btn btn-ghost p-2 hidden sm:inline-flex" @click="paletteRef && paletteRef.open()" aria-label="打开命令面板" title="命令面板（⌘K / Ctrl+K）" data-tour="palette-hint">
+                  <span aria-hidden="true">⌘K</span>
+                </button>
                 <span class="badge badge-success"><span class="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true"></span>系统正常</span>
               </div>
             </header>
@@ -188,6 +226,8 @@
   app.component('Switch', C.Switch)
   app.component('TagInput', C.TagInput)
   app.component('Drawer', C.Drawer)
+  // Phase 1 Bundle A: Agent 执行轨迹组件（消除 agent 黑盒）
+  app.component('AgentTrace', C.AgentTrace)
 
   // 注册页面组件（pages/*.js 已先于本文件执行，挂载到 window.Pages）
   const P = window.Pages || {}
@@ -195,7 +235,7 @@
     'LoginPage': P.Login, 'DashboardPage': P.Dashboard, 'AgentPage': P.Agent,
     'SkillsPage': P.Skills, 'WorkflowsPage': P.Workflows, 'KnowledgePage': P.Knowledge,
     'AuditPage': P.Audit, 'UsersPage': P.Users, 'ChannelsPage': P.Channels,
-    'ConfigsPage': P.Configs
+    'ConfigsPage': P.Configs, 'WebhooksPage': P.Webhooks
   }
   for (const [name, def] of Object.entries(pageMap)) {
     app.component(name, def || { template: '<div class="p-6 text-ink-muted">页面加载失败：' + name + '</div>' })

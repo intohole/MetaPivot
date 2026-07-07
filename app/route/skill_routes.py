@@ -36,6 +36,13 @@ class SkillTestRequest(BaseModel):
     input: dict = Field(default_factory=dict, description="输入参数")
 
 
+class SkillFromRequest(BaseModel):
+    """从 Workflow/Task 创建 Skill"""
+    name: str = Field(..., description="Skill 名称")
+    description: str = Field(..., description="Skill 描述")
+    tags: list[str] = Field(default_factory=list)
+
+
 @router.post("", status_code=201, summary="创建 Skill")
 async def create_skill(
     body: SkillCreateRequest,
@@ -43,7 +50,7 @@ async def create_skill(
     user: CurrentUser = Depends(require_permission("skill:manage")),
 ):
     from app.service.skill_service import skill_service
-    return ok(await skill_service.create_skill(body.model_dump()), request)
+    return ok(await skill_service.create_skill(body.model_dump(), owner_id=user.user_id), request)
 
 
 @router.get("", summary="Skill 列表")
@@ -54,11 +61,49 @@ async def list_skills(
     enabled: bool | None = None,
     source_type: str | None = None,
     keyword: str = "",
+    scope: str = Query("all", pattern="^(all|my|team)$"),
     user: CurrentUser = Depends(require_permission("skill:read")),
 ):
     from app.service.skill_service import skill_service
-    items, total = await skill_service.list_skills(page, page_size, enabled, source_type, keyword)
+    items, total = await skill_service.list_skills(
+        page, page_size, enabled, source_type, keyword,
+        owner_id=user.user_id, scope=scope,
+    )
     return ok(paginate([_skill_dict(s) for s in items], total, page, page_size), request)
+
+
+@router.post("/from-workflow/{workflow_id}", status_code=201, summary="从 Workflow 创建 Skill")
+async def create_skill_from_workflow(
+    workflow_id: str,
+    body: SkillFromRequest,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("skill:manage")),
+):
+    from app.service.skill_service import skill_service
+    return ok(await skill_service.create_skill_from_workflow(
+        workflow_id, body.name, body.description, owner_id=user.user_id, tags=body.tags), request)
+
+
+@router.post("/from-task/{task_id}", status_code=201, summary="从 Agent 任务录制 Skill")
+async def create_skill_from_task(
+    task_id: str,
+    body: SkillFromRequest,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("skill:manage")),
+):
+    from app.service.skill_service import skill_service
+    return ok(await skill_service.record_task_to_skill(
+        task_id, body.name, body.description, owner_id=user.user_id, tags=body.tags), request)
+
+
+@router.post("/extract-from-task/{task_id}", summary="LLM 抽取 skill 草稿（不持久化）")
+async def extract_skill_from_task(
+    task_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("skill:manage")),
+):
+    from app.domain.skill.extractor import extract_skill_from_task as _impl
+    return ok(await _impl(task_id), request)
 
 
 @router.get("/{skill_id}", summary="Skill 详情")
@@ -125,6 +170,16 @@ async def test_skill(
     return ok(await skill_service.test_skill(skill_id, body.input), request)
 
 
+@router.post("/{skill_id}/publish", summary="发布到团队（private→shared）")
+async def publish_skill(
+    skill_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_permission("skill:manage")),
+):
+    from app.service.skill_service import skill_service
+    return ok(await skill_service.publish_to_team(skill_id, user.user_id), request)
+
+
 def _skill_dict(s) -> dict:
     """ORM 转字典"""
     return {
@@ -141,4 +196,8 @@ def _skill_dict(s) -> dict:
         "call_count": s.call_count,
         "last_called_at": s.last_called_at.isoformat() if s.last_called_at else None,
         "created_at": s.created_at.isoformat() if s.created_at else None,
+        "owner_id": s.owner_id,
+        "visibility": s.visibility,
+        "version": s.version,
+        "changelog": s.changelog,
     }

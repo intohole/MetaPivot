@@ -11,6 +11,7 @@ from app.infra.db.models_core import (
     AuditLogORM, KnowledgeDocumentORM, IMChatORM, IMMessageORM, ConfigORM,
     ChatMessageORM, ChatSummaryORM, ScheduledTaskORM,
 )
+from app.infra.db.models_webhook import WebhookORM  # noqa: F401  Phase 2: 确保.metadata 注册
 from app.utils.config import settings
 from app.utils.logger import get_logger
 from app.utils.security import hash_password

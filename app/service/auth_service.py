@@ -32,7 +32,7 @@ _bearer = HTTPBearer(auto_error=False)
 # 角色权限矩阵
 ROLE_PERMISSIONS = {
     "user": {"agent:chat", "knowledge:read", "skill:call"},
-    "manager": {"agent:chat", "knowledge:read", "skill:call", "workflow:execute"},
+    "manager": {"agent:chat", "knowledge:read", "skill:call", "workflow:execute", "webhook:read"},
     "admin": {"*"},  # 全权限
 }
 

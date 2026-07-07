@@ -218,6 +218,7 @@ async def metrics():
 from app.route import im_routes, agent_routes, skill_routes, workflow_routes  # noqa: E402
 from app.route import audit_routes, admin_routes, auth_routes, knowledge_routes  # noqa: E402
 from app.route import schedule_routes, replay_routes, dlq_routes  # noqa: E402
+from app.route import webhook_routes  # noqa: E402
 
 app.include_router(auth_routes.router, prefix="/api/v1/auth", tags=["认证"])
 app.include_router(im_routes.router, prefix="/api/v1/im", tags=["IM接入"])
@@ -226,6 +227,7 @@ app.include_router(agent_routes.router, prefix="/api/v1/agent", tags=["Agent"])
 app.include_router(replay_routes.router, prefix="/api/v1/agent", tags=["Agent"])
 app.include_router(skill_routes.router, prefix="/api/v1/skills", tags=["Skill管理"])
 app.include_router(workflow_routes.router, prefix="/api/v1/workflows", tags=["工作流"])
+app.include_router(webhook_routes.router, prefix="/api/v1/webhooks", tags=["Webhook触发"])
 app.include_router(knowledge_routes.router, prefix="/api/v1/knowledge", tags=["知识库"])
 app.include_router(audit_routes.router, prefix="/api/v1/audit", tags=["审计"])
 # Phase 5: DLQ 死信队列（必须在 schedule_routes 之前注册，避免 /schedules/{task_id} 拦截 /schedules/dlq）

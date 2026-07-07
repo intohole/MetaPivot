@@ -28,14 +28,16 @@ class SkillService:
     # 工具名黑名单前缀（避免 LLM 误调用内部工具）
     _RESERVED_PREFIX = "_"
 
-    async def create_skill(self, data: dict) -> dict:
-        """创建 Skill"""
+    async def create_skill(self, data: dict, owner_id: str = "") -> dict:
+        """创建 Skill（Phase 3: owner_id 注入创建者）"""
         async with get_db_session() as session:
             exists = await session.execute(select(SkillORM).where(SkillORM.name == data["name"]))
             if exists.scalar_one_or_none():
                 raise AppError(ErrorCode.VALIDATION_ERROR, "Skill 名称已存在", 409)
             self._validate(data)
             skill = SkillORM(**data)
+            if owner_id:
+                skill.owner_id = owner_id
             session.add(skill)
             await session.flush()
             log.info("Skill created: {} ({})", skill.name, skill.source_type)
@@ -48,10 +50,16 @@ class SkillService:
         enabled: Optional[bool] = None,
         source_type: Optional[str] = None,
         keyword: str = "",
+        owner_id: str = "",
+        scope: str = "all",  # all/my/team
     ) -> tuple[list[SkillORM], int]:
-        """分页查询"""
+        """分页查询（Phase 3: scope 过滤 my/team/all）"""
         async with get_db_session() as session:
             stmt = select(SkillORM)
+            if scope == "my" and owner_id:
+                stmt = stmt.where(SkillORM.owner_id == owner_id)
+            elif scope == "team":
+                stmt = stmt.where(SkillORM.visibility == "shared")
             if enabled is not None:
                 stmt = stmt.where(SkillORM.enabled == enabled)
             if source_type:
@@ -98,6 +106,32 @@ class SkillService:
             skill.enabled = enabled
             await session.flush()
             return {"id": skill.id, "enabled": skill.enabled}
+
+    async def publish_to_team(self, skill_id: str, user_id: str) -> dict:
+        """Phase 3: 个人 skill 发布为团队 shared（private→shared, version+1, changelog 追加）"""
+        async with get_db_session() as session:
+            skill = await session.get(SkillORM, skill_id)
+            if skill is None:
+                raise AppError(ErrorCode.SKILL_NOT_FOUND, status_code=404)
+            if skill.owner_id and skill.owner_id != user_id:
+                raise AppError(ErrorCode.AUTH_PERMISSION_DENIED, "仅 owner 可发布", 403)
+            skill.visibility = "shared"
+            skill.version += 1
+            skill.changelog = [*skill.changelog, {
+                "version": skill.version, "change": "publish_to_team",
+                "at": datetime.now().isoformat(),
+            }]
+            await session.flush()
+            log.info("Skill published to team: {} v{}", skill.name, skill.version)
+            return {"id": skill.id, "visibility": "shared", "version": skill.version}
+
+    async def create_skill_from_workflow(self, workflow_id, name, description, owner_id="", tags=None):
+        from app.domain.skill.recorder import create_skill_from_workflow as _impl
+        return await _impl(workflow_id, name, description, owner_id, tags)
+
+    async def record_task_to_skill(self, task_id, name, description, owner_id="", tags=None):
+        from app.domain.skill.recorder import record_task_to_skill as _impl
+        return await _impl(task_id, name, description, owner_id, tags)
 
     # ============ 执行 ============
 
@@ -258,6 +292,8 @@ class SkillService:
             "source_ref": s.source_ref, "permission": s.permission,
             "require_confirm": s.require_confirm, "tags": s.tags,
             "enabled": s.enabled, "created_at": s.created_at.isoformat() if s.created_at else None,
+            "owner_id": s.owner_id, "visibility": s.visibility,
+            "version": s.version, "changelog": s.changelog,
         }
 
 

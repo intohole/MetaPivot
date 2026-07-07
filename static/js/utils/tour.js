@@ -47,6 +47,15 @@
           }
         },
         {
+          element: '[data-tour="palette-hint"]',
+          popover: {
+            title: '命令面板（⌘K）',
+            description: '随时按 ⌘K / Ctrl+K 唤起命令面板，可快速发起 Agent 任务、创建 Skill/工作流、查询知识库——无需手动导航。',
+            side: 'bottom',
+            align: 'start'
+          }
+        },
+        {
           element: '[data-tour="quick-actions"]',
           popover: {
             title: '快捷操作',
@@ -56,9 +65,18 @@
           }
         },
         {
+          element: '[data-tour="agent-trace"]',
+          popover: {
+            title: 'Agent 执行轨迹',
+            description: 'Agent 执行时，这里实时展示意图识别、任务规划、工具调用（含入参出参）、反思校正，全程透明无黑盒。任务历史可点击回放完整轨迹。',
+            side: 'top',
+            align: 'center'
+          }
+        },
+        {
           popover: {
             title: '开始体验',
-            description: '引导结束。建议下一步：① 在「系统配置」填入 LLM_API_KEY；② 到「Agent 对话」发起一次测试对话；③ 接入 IM 渠道（钉钉/企微/飞书）。'
+            description: '引导结束。建议下一步：① 按 ⌘K 唤起命令面板快速操作；② 在「系统配置」填入 LLM_API_KEY；③ 到「Agent 对话」发起一次测试对话，观察执行轨迹；④ 接入 IM 渠道（钉钉/企微/飞书）。'
           }
         }
       ]

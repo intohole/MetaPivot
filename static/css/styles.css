@@ -210,6 +210,33 @@ a:hover { text-decoration: underline; }
 .drawflow .connection .main-path:hover { stroke: var(--color-brand); }
 
 /* ============================================================
+   Agent 执行轨迹时间线（agent_trace.js）
+   ============================================================ */
+.agent-trace { margin-top: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-muted); }
+.trace-summary { display: flex; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-border); background: var(--color-surface); border-radius: var(--radius-md) var(--radius-md) 0 0; }
+.trace-timeline { list-style: none; padding: var(--space-2) var(--space-3); margin: 0; position: relative; }
+.trace-timeline::before { content: ''; position: absolute; left: 1.5rem; top: 0; bottom: 0; width: 2px; background: var(--color-border); }
+.trace-item { position: relative; padding-left: 2rem; padding-bottom: var(--space-2); }
+.trace-item:last-child { padding-bottom: 0; }
+.trace-dot { position: absolute; left: 0.625rem; top: 0.25rem; width: 1.5rem; height: 1.5rem; display: flex; align-items: center; justify-content: center; background: var(--color-surface); border: 2px solid var(--color-border); border-radius: 50%; font-size: 0.75rem; z-index: 1; }
+.trace-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-sm); overflow: hidden; }
+.trace-card[open] { border-color: var(--color-brand); }
+.trace-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) var(--space-3); cursor: pointer; list-style: none; }
+.trace-head::-webkit-details-marker { display: none; }
+.trace-meta { display: flex; align-items: center; gap: var(--space-2); }
+.trace-body { padding: var(--space-2) var(--space-3); border-top: 1px solid var(--color-border); background: var(--color-surface-muted); }
+.trace-label { font-size: 0.75rem; font-weight: 600; color: var(--color-text-muted); margin: 0.25rem 0 0.125rem; }
+.trace-code { background: var(--color-surface); padding: var(--space-2); border-radius: var(--radius-sm); font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.75rem; overflow-x: auto; margin: 0.25rem 0; max-height: 240px; overflow-y: auto; }
+.trace-code-error { border-left: 3px solid var(--color-danger); }
+.trace-streaming { padding: var(--space-3); border-top: 1px solid var(--color-border); background: var(--color-surface); min-height: 2rem; }
+.trace-cursor { display: inline-block; width: 0.5rem; height: 1rem; background: var(--color-brand); margin-left: 2px; vertical-align: text-bottom; animation: trace-blink 1s steps(2) infinite; }
+@keyframes trace-blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .trace-cursor { animation: none; } }
+/* 暗色模式适配 */
+[data-theme="dark"] .agent-trace { background: var(--color-surface-muted); }
+[data-theme="dark"] .trace-code { background: var(--color-surface-elevated); }
+
+/* ============================================================
    Markdown 渲染样式（agent.js v-html 用）
    ============================================================ */
 .markdown-body { font-size: var(--text-sm); line-height: 1.6; word-wrap: break-word; }

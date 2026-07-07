@@ -1,6 +1,6 @@
 /* 知识库管理 — 文档上传/列表/检索 */
 (function () {
-  const { ref, reactive, onMounted, computed } = Vue
+  const { ref, reactive, onMounted, computed, nextTick } = Vue
   window.Pages = window.Pages || {}
 
   window.Pages.Knowledge = {
@@ -94,7 +94,22 @@
       const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }
       const onSearch = () => { page.value = 1; loadList() }
 
-      onMounted(loadList)
+      onMounted(() => {
+        loadList()
+        if (state.pendingAction === 'create-knowledge') {
+          state.pendingAction = ''
+          nextTick(() => { showUpload.value = true })
+        }
+        if (state.pendingQuery) {
+          const q = state.pendingQuery
+          state.pendingQuery = ''
+          nextTick(() => {
+            showSearch.value = true
+            searchQuery.value = q
+            runSearch()
+          })
+        }
+      })
 
       return {
         list, total, page, pageSize, statusFilter, loading, columns,

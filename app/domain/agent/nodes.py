@@ -40,7 +40,9 @@ async def intent_node(state: AgentState) -> dict:
 
     # 预加载可用工具（后续 executor 也会用到）+ 内置工具（finish/delegate）
     tools = await skill_service.list_tools_for_llm(permission="user")
-    tools = tools + get_builtin_tools()  # Phase 1: 注入内置工具
+    tools = tools + get_builtin_tools()  # Phase 1: 注入内置工具（finish/delegate）
+    from app.domain.agent.workflow_tool import get_workflow_tools
+    tools = tools + get_workflow_tools()  # Phase 2: 注入 workflow 工具（trigger_workflow/list_workflows）
     # Phase B2: Tool RAG - 工具数 > 15 时按 query embedding 检索 top-10 相关工具子集
     from app.domain.agent.tool_index import get_tool_index
     _ti = get_tool_index()

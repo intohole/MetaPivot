@@ -19,6 +19,10 @@
       const inputRef = ref(null)
       const listRef = ref(null)
       let releaseTrap = null
+      // 参数化命令输入模式（inputPrompt 命令收集用户输入后再执行）
+      const inputMode = ref(false)
+      const inputValue = ref('')
+      const pendingCmd = ref(null)
 
       // 分组计算：无 query 时显示 recent + navigation + actions；有 query 时 fuzzy 过滤
       const groups = computed(() => {
@@ -56,12 +60,23 @@
 
       const close = () => {
         visible.value = false
+        inputMode.value = false
+        pendingCmd.value = null
+        inputValue.value = ''
         if (releaseTrap) { releaseTrap(); releaseTrap = null }
       }
 
       // 执行命令
       const execute = (item) => {
         if (!item) return
+        // 参数化命令：切到输入模式收集参数
+        if (item.inputPrompt) {
+          pendingCmd.value = item
+          inputValue.value = ''
+          inputMode.value = true
+          nextTick(() => { if (inputRef.value) inputRef.value.focus() })
+          return
+        }
         if (window.Commands) window.Commands.markUsed(item.id)
         close()
         if (item.path) {
@@ -71,8 +86,32 @@
         }
       }
 
+      // 输入模式：提交参数执行
+      const submitInput = () => {
+        const cmd = pendingCmd.value
+        const val = inputValue.value.trim()
+        if (!cmd || !val) return
+        if (window.Commands) window.Commands.markUsed(cmd.id)
+        close()
+        if (typeof cmd.action === 'function') cmd.action(val)
+      }
+
+      // 输入模式：Esc 返回命令列表
+      const cancelInput = () => {
+        inputMode.value = false
+        pendingCmd.value = null
+        inputValue.value = ''
+        nextTick(() => { if (inputRef.value) inputRef.value.focus() })
+      }
+
       // 键盘导航
       const onKeydown = (e) => {
+        // 输入模式：Enter 提交，Esc 返回
+        if (inputMode.value) {
+          if (e.key === 'Enter') { e.preventDefault(); submitInput() }
+          else if (e.key === 'Escape') { e.preventDefault(); cancelInput() }
+          return
+        }
         const items = flatItems.value
         if (items.length === 0) return
         const idx = items.findIndex(i => i.id === activeId.value)
@@ -104,7 +143,7 @@
       onMounted(() => { /* 父组件通过 ref.open() 调用 */ })
       onUnmounted(() => { if (releaseTrap) releaseTrap() })
 
-      return { visible, query, activeId, rootRef, inputRef, listRef, groups, flatItems, open, close, execute, onKeydown }
+      return { visible, query, activeId, rootRef, inputRef, listRef, groups, flatItems, open, close, execute, onKeydown, inputMode, inputValue, pendingCmd, submitInput, cancelInput }
     },
     template: `
       <transition name="fade">
@@ -112,16 +151,20 @@
           <div ref="rootRef" role="dialog" aria-modal="true" aria-label="命令面板"
                class="card w-full max-w-xl shadow-modal overflow-hidden">
             <div class="flex items-center gap-3 px-4 py-3 border-b border-border">
-              <span aria-hidden="true" class="text-ink-muted">🔍</span>
-              <input ref="inputRef" v-model="query" type="text"
-                     role="combobox" aria-expanded="true" aria-controls="cmd-list"
-                     :aria-activedescendant="activeId"
-                     placeholder="输入命令或页面名..."
+              <span v-if="inputMode" aria-hidden="true" class="text-brand">{{ pendingCmd?.icon || '›' }}</span>
+              <span v-else aria-hidden="true" class="text-ink-muted">🔍</span>
+              <span v-if="inputMode" class="text-sm text-ink-muted whitespace-nowrap">{{ pendingCmd?.label }}</span>
+              <input ref="inputRef" v-model="inputMode ? inputValue : query" type="text"
+                     :role="inputMode ? 'textbox' : 'combobox'"
+                     :aria-expanded="!inputMode" :aria-controls="inputMode ? null : 'cmd-list'"
+                     :aria-activedescendant="inputMode ? null : activeId"
+                     :placeholder="inputMode ? (pendingCmd?.inputPrompt || '输入...') : '输入命令或页面名...'"
                      class="flex-1 bg-transparent outline-none text-ink placeholder-ink-subtle"
                      @keydown="onKeydown" />
-              <kbd class="text-xs text-ink-subtle border border-border rounded px-1.5 py-0.5">ESC</kbd>
+              <button v-if="inputMode" class="text-xs text-ink-subtle hover:text-ink" @click="cancelInput" title="返回命令列表">← 返回</button>
+              <kbd v-else class="text-xs text-ink-subtle border border-border rounded px-1.5 py-0.5">ESC</kbd>
             </div>
-            <ul ref="listRef" id="cmd-list" role="listbox" class="max-h-[50vh] overflow-y-auto py-2">
+            <ul v-if="!inputMode" ref="listRef" id="cmd-list" role="listbox" class="max-h-[50vh] overflow-y-auto py-2">
               <template v-for="(group, gi) in groups" :key="gi">
                 <li role="presentation" class="px-4 py-1 text-xs font-medium text-ink-subtle uppercase tracking-wide">{{ group.label }}</li>
                 <li v-for="item in group.items" :key="item.id" :id="item.id" role="option"
@@ -139,10 +182,19 @@
                 无匹配命令
               </li>
             </ul>
+            <div v-else class="px-4 py-6 text-xs text-ink-subtle">
+              输入参数后按 <kbd class="border border-border rounded px-1">↵</kbd> 执行，按 <kbd class="border border-border rounded px-1">esc</kbd> 返回命令列表
+            </div>
             <footer class="flex items-center gap-4 px-4 py-2 border-t border-border text-xs text-ink-subtle bg-surface-muted">
-              <span><kbd class="border border-border rounded px-1">↑</kbd><kbd class="border border-border rounded px-1 ml-0.5">↓</kbd> 导航</span>
-              <span><kbd class="border border-border rounded px-1">↵</kbd> 执行</span>
-              <span><kbd class="border border-border rounded px-1">esc</kbd> 关闭</span>
+              <template v-if="inputMode">
+                <span><kbd class="border border-border rounded px-1">↵</kbd> 执行</span>
+                <span><kbd class="border border-border rounded px-1">esc</kbd> 返回</span>
+              </template>
+              <template v-else>
+                <span><kbd class="border border-border rounded px-1">↑</kbd><kbd class="border border-border rounded px-1 ml-0.5">↓</kbd> 导航</span>
+                <span><kbd class="border border-border rounded px-1">↵</kbd> 执行</span>
+                <span><kbd class="border border-border rounded px-1">esc</kbd> 关闭</span>
+              </template>
             </footer>
           </div>
         </div>

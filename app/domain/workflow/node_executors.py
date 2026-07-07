@@ -128,11 +128,26 @@ async def exec_agent_call(config: dict, context: dict, chat_id: str, user_id: st
         message: str - Agent 任务消息（支持 ${var} 变量替换）
         context: dict - 传递给 Agent 的上下文（可选）
         timeout: int - 等待超时秒数（默认 120）
+
+    Phase 2: 循环检测 + 执行栈传递。当前 workflow_id push 到栈，
+    合并到 agent_context["__exec_stack"]，子 Agent trigger_workflow 时可检测循环。
     """
     from app.service.agent_service import agent_service
+    from app.domain.workflow.cycle_detector import push_id, should_block
 
     message = _resolve_vars_str(config.get("message", ""), context)
-    agent_context = config.get("context", {})
+    agent_context = dict(config.get("context", {}))  # 浅拷贝避免污染原 config
+
+    # Phase 2: 循环检测 + 栈传递
+    exec_stack = context.get("__exec_stack", [])
+    current_wf_id = context.get("__current_workflow_id", "")
+    if current_wf_id:
+        blocked, reason = should_block(exec_stack, f"workflow:{current_wf_id}")
+        if blocked:
+            log.warning("exec_agent_call blocked: {}", reason)
+            return {"error": reason, "blocked": True}
+        agent_context["__exec_stack"] = push_id(exec_stack, f"workflow:{current_wf_id}")
+
     timeout = config.get("timeout", 120)
     result = await agent_service.start_task_and_wait(
         message=message, channel="workflow", chat_id=chat_id,
@@ -148,15 +163,27 @@ async def exec_sub_workflow(config: dict, context: dict, chat_id: str, user_id: 
     config:
         workflow_id: str - 子工作流 ID
         inputs: dict - 传递给子工作流的输入（支持 ${var} 变量替换）
+
+    Phase 2: 循环检测 + 栈传递。push sub_workflow_id 到栈，子工作流 _run_execution
+    会把栈存入 context["__exec_stack"]，子工作流的 agent_call 节点可继续追踪。
     """
     from app.service.workflow_service import workflow_service
+    from app.domain.workflow.cycle_detector import push_id, should_block
 
     sub_id = config.get("workflow_id")
     if not sub_id:
         return {"error": "workflow_id 未配置"}
     sub_inputs = _resolve_vars(config.get("inputs", {}), context)
+
+    exec_stack = context.get("__exec_stack", [])
+    blocked, reason = should_block(exec_stack, sub_id)
+    if blocked:
+        log.warning("exec_sub_workflow blocked: {}", reason)
+        return {"error": reason, "blocked": True}
+
     result = await workflow_service.execute_workflow(
         workflow_id=sub_id, inputs=sub_inputs, chat_id=chat_id, user_id=user_id,
+        exec_stack=push_id(exec_stack, sub_id),
     )
     context.setdefault("outputs", {})["sub_workflow"] = result
     return {"sub_workflow_result": result}

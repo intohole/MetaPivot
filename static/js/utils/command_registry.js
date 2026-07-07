@@ -12,12 +12,19 @@
 
   /**
    * 注册命令
-   * @param {Object} cmd - { id, label, icon, path?, action?, keywords?, group, shortcut? }
+   * @param {Object} cmd - { id, label, icon, path?, action?, keywords?, group, shortcut?, inputPrompt? }
    *   group: 'navigation' | 'actions' | 'recent'
+   *   inputPrompt: String — 非空时表示参数化命令，Palette 会切到输入模式收集用户输入再调 action(input)
    */
   function register(cmd) {
     if (!cmd || !cmd.id || items.some(i => i.id === cmd.id)) return
     items.push(cmd)
+  }
+
+  /** 批量注册命令（action 命令集中注册场景） */
+  function registerActions(cmds) {
+    if (!Array.isArray(cmds)) return
+    cmds.forEach(register)
   }
 
   /** 获取所有命令，按 group 分组（recent + navigation + actions） */
@@ -39,5 +46,5 @@
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(recent)) } catch (e) {}
   }
 
-  window.Commands = { register, getAll, markUsed }
+  window.Commands = { register, registerActions, getAll, markUsed }
 })()

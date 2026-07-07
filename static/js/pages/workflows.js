@@ -16,7 +16,7 @@
 
       const showForm = ref(false)
       const editingId = ref('')
-      const form = reactive({ name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true })
+      const form = reactive({ name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true, trigger: { type: 'manual', cron_expr: '' } })
       const editorMode = ref('visual')  // visual | json
       const wfContainer = ref(null)
       const wfPalette = ref(null)
@@ -31,6 +31,7 @@
       const columns = computed(() => {
         const cols = [
           { key: 'name', label: '名称' },
+          { key: 'trigger', label: '触发', width: '90px' },
           { key: 'enabled', label: '状态', width: '80px' },
           { key: 'version', label: '版本', width: '80px' },
           { key: 'created_at', label: '创建时间', width: '160px' }
@@ -48,7 +49,6 @@
         } finally { loading.value = false }
       }
 
-      // Phase C2: 初始化 Drawflow 编辑器（modal 打开后 nextTick 拿 DOM）
       const initEditor = (definition) => {
         nextTick(() => {
           if (!wfContainer.value || !window.WorkflowEditor) return
@@ -62,7 +62,7 @@
       }
 
       const openCreate = () => {
-        Object.assign(form, { name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true })
+        Object.assign(form, { name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true, trigger: { type: 'manual', cron_expr: '' } })
         editingId.value = ''
         editorMode.value = 'visual'
         showForm.value = true
@@ -73,7 +73,8 @@
         const def = row.definition || { nodes: [], edges: [], variables: [] }
         Object.assign(form, {
           name: row.name, description: row.description || '',
-          definition: JSON.stringify(def, null, 2), enabled: row.enabled
+          definition: JSON.stringify(def, null, 2), enabled: row.enabled,
+          trigger: row.trigger || { type: 'manual', cron_expr: '' }
         })
         editingId.value = row.id
         editorMode.value = 'visual'
@@ -81,12 +82,10 @@
         initEditor(def)
       }
 
-      // modal 关闭时销毁编辑器
       watch(showForm, (v) => { if (!v && window.WorkflowEditor) window.WorkflowEditor.destroy() })
 
       const submitForm = async () => {
         try {
-          // visual 模式从 editor 导出最新 JSON；json 模式从 textarea 解析
           let def = {}
           if (editorMode.value === 'visual' && window.WorkflowEditor) {
             def = window.WorkflowEditor.exportJSON()
@@ -95,7 +94,7 @@
               state.notify('definition 不是合法 JSON', 'error'); return
             }
           }
-          const payload = { name: form.name, description: form.description, definition: def, enabled: form.enabled }
+          const payload = { name: form.name, description: form.description, definition: def, enabled: form.enabled, trigger: form.trigger }
           if (editingId.value) {
             await window.API.put('/workflows/' + editingId.value, payload)
             state.notify('工作流更新成功', 'success')
@@ -127,8 +126,7 @@
 
       const openRun = (row) => {
         runWorkflow.value = row
-        runInputs.value = '{}'
-        runResult.value = null
+        runInputs.value = '{}'; runResult.value = null
         showRun.value = true
       }
 
@@ -140,22 +138,37 @@
         }
         try {
           const res = await window.API.post('/workflows/' + runWorkflow.value.id + '/execute', { inputs })
-          runResult.value = { execution_id: res.execution_id, status: res.status, message: '执行已启动，可稍后查看状态' }
+          runResult.value = { execution_id: res.execution_id, status: res.status, message: '执行已启动，可点击下方按钮刷新状态' }
           state.notify('工作流已触发', 'success')
+        } catch (e) {}
+      }
+
+      const checkRunStatus = async () => {
+        if (!runResult.value?.execution_id) return
+        try {
+          const res = await window.API.get('/workflows/executions/' + runResult.value.execution_id)
+          runResult.value = { ...runResult.value, status: res.status, current_node: res.current_node, outputs: res.outputs, error: res.error }
         } catch (e) {}
       }
 
       const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }
       const onSearch = () => { page.value = 1; loadList() }
 
-      onMounted(loadList)
+      onMounted(() => {
+        loadList()
+        if (state.pendingAction === 'create-workflow') {
+          state.pendingAction = ''
+          nextTick(() => openCreate())
+        }
+      })
 
       return {
         list, total, page, pageSize, keyword, loading, columns,
         showForm, editingId, form, isAdmin, editorMode, wfContainer, wfPalette,
         showRun, runWorkflow, runInputs, runResult,
         loadList, openCreate, openEdit, submitForm, removeRow, toggleEnabled,
-        openRun, executeRun, onPageChange, onSearch, state
+        openRun, executeRun, checkRunStatus, onPageChange, onSearch, state,
+        SkillActions: window.SkillActions
       }
     },
     template: `
@@ -173,6 +186,9 @@
             <template #name="{ row }">
               <p class="font-medium text-ink">{{ row.name }}</p>
               <p class="text-xs text-ink-muted">{{ row.description || '无描述' }}</p>
+            </template>
+            <template #trigger="{ row }">
+              <span :class="['badge', row.trigger?.type === 'webhook' ? 'badge-info' : row.trigger?.type === 'schedule' ? 'badge-warning' : 'badge-muted']">{{ row.trigger?.type || 'manual' }}</span>
             </template>
             <template #enabled="{ row }">
               <switch v-if="isAdmin" :model-value="row.enabled" @update:model-value="() => toggleEnabled(row)" :aria-label="(row.enabled ? '禁用' : '启用') + ' ' + row.name" size="sm" />
@@ -212,6 +228,25 @@
               <textarea id="wf-desc" v-model="form.description" class="textarea" rows="2"></textarea>
             </div>
             <div>
+              <label class="block text-sm font-medium text-ink mb-1">触发方式</label>
+              <div class="flex flex-wrap gap-3 items-center">
+                <label class="flex items-center gap-1">
+                  <input type="radio" v-model="form.trigger.type" value="manual" />
+                  <span class="text-sm">手动</span>
+                </label>
+                <label class="flex items-center gap-1">
+                  <input type="radio" v-model="form.trigger.type" value="webhook" />
+                  <span class="text-sm">Webhook</span>
+                </label>
+                <label class="flex items-center gap-1">
+                  <input type="radio" v-model="form.trigger.type" value="schedule" />
+                  <span class="text-sm">定时</span>
+                </label>
+                <input v-if="form.trigger.type === 'schedule'" type="text" v-model="form.trigger.cron_expr" class="input flex-1 min-w-[180px] font-mono text-xs" placeholder="*/5 * * * *（分 时 日 月 周）" />
+              </div>
+              <p v-if="form.trigger.type === 'webhook'" class="mt-1 text-xs text-ink-subtle">保存后自动生成 Webhook URL（在 Webhook 管理页查看）</p>
+            </div>
+            <div>
               <div class="flex items-center justify-between mb-2">
                 <label class="block text-sm font-medium text-ink">DAG 定义</label>
                 <div class="flex gap-1">
@@ -243,9 +278,15 @@
               <textarea id="run-input" v-model="runInputs" class="textarea font-mono text-xs" rows="6"></textarea>
             </div>
             <div v-if="runResult" class="card p-3 bg-blue-50 border-blue-200">
-              <p class="text-sm text-blue-900"><strong>执行 ID：</strong>{{ runResult.execution_id }}</p>
-              <p class="text-sm text-blue-900"><strong>状态：</strong>{{ runResult.status }}</p>
-              <p class="text-xs text-blue-700 mt-1">{{ runResult.message }}</p>
+              <div class="flex items-center justify-between mb-1">
+                <p class="text-sm text-blue-900"><strong>执行 ID：</strong>{{ runResult.execution_id }}</p>
+                <div class="flex gap-2">
+                  <button class="btn btn-secondary text-xs" @click="checkRunStatus">🔄 刷新状态</button>
+                  <button v-if="runWorkflow" class="btn btn-secondary text-xs" @click="SkillActions.fromWorkflow(runWorkflow.id, state)">📋 复制为 Skill</button>
+                </div>
+              </div>
+              <p class="text-sm text-blue-900"><strong>状态：</strong>{{ runResult.status }}<span v-if="runResult.current_node"> | 当前节点：{{ runResult.current_node }}</span></p>
+              <p class="text-xs text-blue-700 mt-1">{{ runResult.message || (runResult.error ? JSON.stringify(runResult.error) : '点击刷新查看最新状态') }}</p>
             </div>
           </div>
           <template #footer>

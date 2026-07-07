@@ -43,6 +43,11 @@ class SkillORM(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     call_count: Mapped[int] = mapped_column(Integer, default=0)
     last_called_at: Mapped[Optional[datetime]] = mapped_column(default=None)
+    # Phase 3: 个人/团队 + 版本管理
+    owner_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)  # 创建者 user_id
+    visibility: Mapped[str] = mapped_column(String(20), default="private", nullable=False, index=True)  # private/shared
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    changelog: Mapped[list] = mapped_column(JSON, default=list)  # [{version, change, at}]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now(), nullable=False)
 
