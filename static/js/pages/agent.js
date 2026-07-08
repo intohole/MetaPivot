@@ -224,11 +224,49 @@
 
       // Phase 3: 任务完成后快捷动作
       const showPostActions = ref(false)
+      // Sprint 4: 沉淀 Skill 主题化 Modal（替代 confirmAction 简化弹窗）
+      const showSaveSkill = ref(false)
+      const saveSkillForm = reactive({ name: '', description: '', tags: [] })
+      const saveSkillDraft = ref(null)  // LLM 抽取的草稿元数据（confidence/reasoning 等只读展示）
+      const savingSkill = ref(false)
+
       const saveAsSkill = async () => {
         if (!currentTaskId.value) return
-        const saved = await window.SkillActions.extractAndSave(currentTaskId.value, state)
-        if (saved) showPostActions.value = false
+        try {
+          state.notify('LLM 正在分析任务轨迹...', 'info')
+          const draft = await window.SkillActions.extractDraft(currentTaskId.value)
+          saveSkillDraft.value = draft
+          saveSkillForm.name = draft.name || ''
+          saveSkillForm.description = draft.description || '从任务录制'
+          saveSkillForm.tags = draft.suggested_tags || []
+          showSaveSkill.value = true
+        } catch (e) {
+          state.notify('抽取失败：' + (e.message || '未知错误'), 'error')
+        }
       }
+
+      const confirmSaveSkill = async () => {
+        if (!saveSkillForm.name.trim()) { state.notify('请填写 Skill 名称', 'error'); return }
+        savingSkill.value = true
+        try {
+          const saved = await window.SkillActions.saveFromTask(currentTaskId.value, {
+            name: saveSkillForm.name.trim(),
+            description: saveSkillForm.description,
+            tags: saveSkillForm.tags,
+          })
+          state.notify('Skill 保存成功：' + (saved.name || saveSkillForm.name), 'success')
+          showSaveSkill.value = false
+          showPostActions.value = false
+        } catch (e) {
+          state.notify('保存失败：' + (e.message || '未知错误'), 'error')
+        } finally { savingSkill.value = false }
+      }
+
+      const retryTask = () => {
+        const lastMsg = messages.filter(m => m.role === 'user').pop()
+        if (lastMsg) { inputMsg.value = lastMsg.content; sendMessage() }
+      }
+
       const rerunTask = () => {
         const lastMsg = messages.filter(m => m.role === 'user').pop()
         if (lastMsg) inputMsg.value = lastMsg.content; showPostActions.value = false
@@ -286,7 +324,8 @@
         history, streaming, streamingText, reconnecting, reconnectAttempt, canSend,
         chatBox, columns, renderMarkdown,
         sendMessage, handleConfirm, cancelTask, viewHistory, manualReconnect, state,
-        showPostActions, saveAsSkill, rerunTask
+        showPostActions, saveAsSkill, rerunTask, retryTask,
+        showSaveSkill, saveSkillForm, saveSkillDraft, savingSkill, confirmSaveSkill,
       }
     },
     template: `
@@ -330,10 +369,19 @@
             </div>
 
             <!-- Phase 3: 任务完成后快捷动作条 -->
-            <div v-if="showPostActions && taskStatus === 'completed'" class="flex gap-2 mb-3">
-              <button class="btn btn-secondary text-sm" @click="saveAsSkill">💾 保存为 Skill</button>
+            <div v-if="showPostActions && taskStatus === 'completed'" class="flex gap-2 mb-3 items-center">
+              <button class="btn btn-secondary text-sm relative" @click="saveAsSkill">
+                💾 保存为 Skill
+                <span class="absolute -top-1 -right-1 badge badge-success text-xs animate-pulse">推荐</span>
+              </button>
               <button class="btn btn-ghost text-sm" @click="rerunTask">🔄 重新发起</button>
               <button class="btn btn-ghost text-sm" @click="showPostActions = false">关闭</button>
+            </div>
+
+            <!-- Sprint 4: 任务失败快捷重试 -->
+            <div v-if="taskStatus === 'failed'" class="flex gap-2 mb-3">
+              <button class="btn btn-primary text-sm" @click="retryTask">🔄 重试任务</button>
+              <button class="btn btn-ghost text-sm" @click="taskStatus = ''">关闭</button>
             </div>
 
             <!-- HITL 确认 -->
@@ -380,6 +428,40 @@
           </base-card>
         </div>
       </div>
+
+      <!-- Sprint 4: 沉淀 Skill 主题化 Modal（可编辑草稿字段 + 置信度/理由展示） -->
+      <base-modal v-model="showSaveSkill" title="保存为 Skill" width="max-w-lg">
+        <div class="space-y-4">
+          <!-- LLM 抽取元数据（只读展示） -->
+          <div v-if="saveSkillDraft" class="card p-3 bg-blue-50 border-blue-200 space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-medium text-blue-900">🤖 LLM 分析结果</span>
+              <span class="badge badge-info text-xs">置信度 {{ saveSkillDraft.confidence != null ? (saveSkillDraft.confidence * 100).toFixed(0) + '%' : 'N/A' }}</span>
+            </div>
+            <p v-if="saveSkillDraft.reasoning" class="text-xs text-blue-700">{{ saveSkillDraft.reasoning }}</p>
+            <p class="text-xs text-blue-700">检测到 {{ saveSkillDraft.step_count || 0 }} 个可复用步骤</p>
+          </div>
+          <!-- 可编辑字段 -->
+          <div>
+            <label for="skill-name" class="block text-sm font-medium text-ink mb-1">Skill 名称 *</label>
+            <input id="skill-name" type="text" v-model="saveSkillForm.name" class="input" placeholder="如：查询客户订单" />
+          </div>
+          <div>
+            <label for="skill-desc" class="block text-sm font-medium text-ink mb-1">描述</label>
+            <textarea id="skill-desc" v-model="saveSkillForm.description" class="textarea" rows="2" placeholder="这个 Skill 做什么？"></textarea>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-ink mb-1">标签</label>
+            <tag-input v-model="saveSkillForm.tags" placeholder="输入标签后回车" />
+          </div>
+        </div>
+        <template #footer>
+          <button class="btn btn-secondary" @click="showSaveSkill = false">取消</button>
+          <button class="btn btn-primary" @click="confirmSaveSkill" :disabled="savingSkill">
+            {{ savingSkill ? '保存中...' : '💾 保存 Skill' }}
+          </button>
+        </template>
+      </base-modal>
     `
   }
 })()

@@ -26,6 +26,11 @@
       const runInputs = ref('{}')
       const runResult = ref(null)
 
+      // Sprint 4: 复制为 Skill 主题化 Modal（替代 window.prompt）
+      const showSaveSkill = ref(false)
+      const saveSkillForm = reactive({ name: '', description: '', tags: [] })
+      const savingSkill = ref(false)
+
       const isAdmin = computed(() => state.hasRole('admin'))
 
       const columns = computed(() => {
@@ -161,6 +166,31 @@
         }
       }
 
+      // Sprint 4: 复制工作流为 Skill（主题化 Modal 替代 window.prompt）
+      const openSaveSkill = () => {
+        if (!runWorkflow.value) return
+        saveSkillForm.name = runWorkflow.value.name + ' (Skill)'
+        saveSkillForm.description = runWorkflow.value.description || '从工作流创建'
+        saveSkillForm.tags = []
+        showSaveSkill.value = true
+      }
+      const confirmSaveSkill = async () => {
+        if (!saveSkillForm.name.trim()) { state.notify('请填写 Skill 名称', 'error'); return }
+        if (!runWorkflow.value) return
+        savingSkill.value = true
+        try {
+          const saved = await window.SkillActions.saveFromWorkflow(runWorkflow.value.id, {
+            name: saveSkillForm.name.trim(),
+            description: saveSkillForm.description,
+            tags: saveSkillForm.tags,
+          })
+          state.notify('Skill 创建成功：' + (saved.name || saveSkillForm.name), 'success')
+          showSaveSkill.value = false
+        } catch (e) {
+          state.notify('创建失败：' + (e.message || '未知错误'), 'error')
+        } finally { savingSkill.value = false }
+      }
+
       const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }
       const onSearch = () => { page.value = 1; loadList() }
       const goTemplates = () => state.navigate('/templates')
@@ -177,9 +207,10 @@
         list, total, page, pageSize, keyword, loading, columns,
         showForm, editingId, form, isAdmin, editorMode, wfContainer, wfPalette,
         showRun, runWorkflow, runInputs, runResult,
+        showSaveSkill, saveSkillForm, savingSkill,
         loadList, openCreate, openEdit, submitForm, removeRow, toggleEnabled,
-        openRun, executeRun, checkRunStatus, onPageChange, onSearch, goTemplates, state,
-        SkillActions: window.SkillActions
+        openRun, executeRun, checkRunStatus, openSaveSkill, confirmSaveSkill,
+        onPageChange, onSearch, goTemplates, state,
       }
     },
     template: `
@@ -296,7 +327,7 @@
                 <p class="text-sm text-blue-900"><strong>执行 ID：</strong>{{ runResult.execution_id }}</p>
                 <div class="flex gap-2">
                   <button class="btn btn-secondary text-xs" @click="checkRunStatus">🔄 刷新状态</button>
-                  <button v-if="runWorkflow" class="btn btn-secondary text-xs" @click="SkillActions.fromWorkflow(runWorkflow.id, state)">📋 复制为 Skill</button>
+                  <button v-if="runWorkflow" class="btn btn-secondary text-xs" @click="openSaveSkill">📋 复制为 Skill</button>
                 </div>
               </div>
               <p class="text-sm text-blue-900"><strong>状态：</strong>{{ runResult.status }}<span v-if="runResult.current_node"> | 当前节点：{{ runResult.current_node }}</span></p>
@@ -306,6 +337,34 @@
           <template #footer>
             <button class="btn btn-secondary" @click="showRun = false">关闭</button>
             <button class="btn btn-primary" @click="executeRun">▶ 执行</button>
+          </template>
+        </base-modal>
+
+        <!-- Sprint 4: 复制为 Skill 主题化 Modal -->
+        <base-modal v-model="showSaveSkill" title="复制为 Skill" width="max-w-lg">
+          <div class="space-y-4">
+            <div class="card p-3 bg-blue-50 border-blue-200">
+              <p class="text-sm text-blue-900"><strong>源工作流：</strong>{{ runWorkflow?.name }}</p>
+              <p class="text-xs text-blue-700 mt-1">将工作流封装为可复用 Skill，Agent 可按需调用</p>
+            </div>
+            <div>
+              <label for="wf-skill-name" class="block text-sm font-medium text-ink mb-1">Skill 名称 *</label>
+              <input id="wf-skill-name" type="text" v-model="saveSkillForm.name" class="input" placeholder="Skill 名称" />
+            </div>
+            <div>
+              <label for="wf-skill-desc" class="block text-sm font-medium text-ink mb-1">描述</label>
+              <textarea id="wf-skill-desc" v-model="saveSkillForm.description" class="textarea" rows="2"></textarea>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-ink mb-1">标签</label>
+              <tag-input v-model="saveSkillForm.tags" placeholder="输入标签后回车" />
+            </div>
+          </div>
+          <template #footer>
+            <button class="btn btn-secondary" @click="showSaveSkill = false">取消</button>
+            <button class="btn btn-primary" @click="confirmSaveSkill" :disabled="savingSkill">
+              {{ savingSkill ? '创建中...' : '📋 创建 Skill' }}
+            </button>
           </template>
         </base-modal>
       </div>
