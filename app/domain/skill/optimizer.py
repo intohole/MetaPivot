@@ -35,6 +35,11 @@ MIN_EXECUTIONS_FOR_OPT = 3   # 至少 3 次执行才分析
 AUTO_MERGE_CONFIDENCE = 0.9  # 置信度 ≥ 0.9 自动合并
 OPTIMIZE_COOLDOWN_HOURS = 24  # 同一 Skill 24h 内不重复优化
 
+# 自动熔断阈值（circuit breaker）：失败率过高自动禁用，防止坏技能持续损害体验
+CIRCUIT_BREAK_FAILURE_RATE = 0.6  # 失败率 ≥ 60% 触发熔断
+CIRCUIT_BREAK_MIN_EXECUTIONS = 5  # 至少 5 次执行才熔断（避免样本过小误判）
+CIRCUIT_BREAK_WINDOW_HOURS = 24   # 统计窗口（近 24h）
+
 OPTIMIZE_PROMPT = """你是 Skill 优化专家。给定一个 Skill 的当前定义和近期失败执行记录，分析失败模式并生成优化建议。
 
 当前 Skill 定义：
@@ -67,7 +72,10 @@ async def record_execution(
     task_id: str = "", args_summary: Optional[dict] = None,
     error_message: str = "",
 ) -> None:
-    """记录一次 Skill 执行结果（供 optimizer 分析）"""
+    """记录一次 Skill 执行结果（供 optimizer 分析）
+
+    记录后异步触发熔断检查（失败率过高自动禁用，fire-and-forget 不阻塞）。
+    """
     async with get_db_session() as session:
         record = SkillExecutionORM(
             skill_id=skill_id, skill_name=skill_name,
@@ -77,6 +85,60 @@ async def record_execution(
         )
         session.add(record)
         await session.flush()
+
+    # 熔断检查：失败时才可能触发，fire-and-forget
+    if status == "failed":
+        from app.utils.config import settings
+        if settings.skill_circuit_breaker_enabled:
+            import asyncio
+            asyncio.create_task(_safe_circuit_break_check(skill_id, skill_name))
+
+
+async def _safe_circuit_break_check(skill_id: str, skill_name: str) -> None:
+    """包装熔断检查，吞异常避免 fire-and-forget 任务静默崩溃"""
+    try:
+        await check_and_circuit_break(skill_id, skill_name)
+    except Exception as e:
+        log.warning("circuit break check failed for skill {}: {}", skill_id, e)
+
+
+async def check_and_circuit_break(skill_id: str, skill_name: str = "") -> dict:
+    """检查 Skill 是否应熔断：近 24h 失败率 ≥ 60% 且 ≥ 5 次执行 → 自动禁用
+
+    熔断后在 changelog 追加 {source: "circuit_breaker"} 标记，前端据此显示熔断 badge。
+    Returns: {tripped, reason, failure_rate?, total?}
+    """
+    stats = await _get_execution_stats(
+        skill_id, window_hours=CIRCUIT_BREAK_WINDOW_HOURS,
+    )
+    if stats["total"] < CIRCUIT_BREAK_MIN_EXECUTIONS:
+        return {"tripped": False, "reason": "insufficient_data", "total": stats["total"]}
+    if stats["failure_rate"] < CIRCUIT_BREAK_FAILURE_RATE:
+        return {"tripped": False, "reason": "healthy", "failure_rate": stats["failure_rate"]}
+
+    # 触发熔断
+    async with get_db_session() as session:
+        skill = await session.get(SkillORM, skill_id)
+        if skill is None:
+            return {"tripped": False, "reason": "skill_not_found"}
+        if not skill.enabled:
+            # 已禁用（可能是手动禁用或已熔断），不重复操作
+            return {"tripped": False, "reason": "already_disabled"}
+        skill.enabled = False
+        skill.changelog = [*skill.changelog, {
+            "version": skill.version, "change": f"自动熔断：近{CIRCUIT_BREAK_WINDOW_HOURS}h失败率 {stats['failure_rate']:.0%}（{stats['failed']}/{stats['total']}）",
+            "source": "circuit_breaker", "at": datetime.now().isoformat(),
+            "failure_rate": round(stats["failure_rate"], 3),
+        }]
+        await session.flush()
+        log.warning(
+            "Skill circuit-break tripped: {} ({}) fail_rate={:.0%} ({}/{})",
+            skill_id, skill_name or skill.name, stats["failure_rate"], stats["failed"], stats["total"],
+        )
+        return {
+            "tripped": True, "reason": "failure_rate_exceeded",
+            "failure_rate": stats["failure_rate"], "total": stats["total"],
+        }
 
 
 async def check_and_optimize(skill_id: str) -> dict:
@@ -107,9 +169,9 @@ async def check_and_optimize(skill_id: str) -> dict:
     return {"optimized": False, "reason": "optimization_failed"}
 
 
-async def _get_execution_stats(skill_id: str) -> dict:
-    """获取 Skill 近 7 天的执行统计"""
-    since = datetime.now() - timedelta(days=7)
+async def _get_execution_stats(skill_id: str, window_hours: int = 168) -> dict:
+    """获取 Skill 近 window_hours 小时的执行统计（默认 7 天）"""
+    since = datetime.now() - timedelta(hours=window_hours)
     async with get_db_session() as session:
         # 总执行数
         total_stmt = select(func.count()).where(
@@ -231,14 +293,27 @@ async def _generate_optimization(skill_id: str, stats: dict) -> Optional[str]:
 
 
 async def get_skill_health(skill_id: str) -> dict:
-    """获取 Skill 健康度（成功率/失败率/近期趋势）"""
+    """获取 Skill 健康度（成功率/失败率/近期趋势/熔断状态）"""
     stats = await _get_execution_stats(skill_id)
+    failure_rate = stats["failure_rate"]
+    health = (
+        "healthy" if failure_rate < FAILURE_RATE_THRESHOLD
+        else "degraded" if failure_rate < CIRCUIT_BREAK_FAILURE_RATE
+        else "critical"
+    )
+    # 检查是否已被熔断（changelog 末尾有 circuit_breaker 标记且 enabled=False）
+    circuit_broken = False
+    async with get_db_session() as session:
+        skill = await session.get(SkillORM, skill_id)
+        if skill and not skill.enabled and skill.changelog:
+            last_entry = skill.changelog[-1] if isinstance(skill.changelog, list) else None
+            if isinstance(last_entry, dict) and last_entry.get("source") == "circuit_breaker":
+                circuit_broken = True
     return {
         "skill_id": skill_id,
         "total_executions": stats["total"],
         "failed_executions": stats["failed"],
-        "failure_rate": round(stats["failure_rate"], 3),
-        "health": "healthy" if stats["failure_rate"] < FAILURE_RATE_THRESHOLD
-                  else "degraded" if stats["failure_rate"] < 0.6
-                  else "critical",
+        "failure_rate": round(failure_rate, 3),
+        "health": health,
+        "circuit_broken": circuit_broken,
     }

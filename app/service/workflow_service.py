@@ -269,6 +269,16 @@ class WorkflowService:
                 except Exception as audit_e:
                     log.warning("audit workflow {} failed: {}", execution_id, audit_e)
 
+            # Sprint 6.3: IM 双向回调 — IM 触发的工作流完成后，结果回传原会话
+            if chat_id and final_status in ("completed", "failed"):
+                try:
+                    from app.service.im_push_service import im_push_service
+                    await im_push_service.push_workflow_result(
+                        workflow_id, chat_id, inputs, outputs, final_status,
+                    )
+                except Exception as cb_e:
+                    log.warning("IM callback for workflow {} failed: {}", execution_id, cb_e)
+
     async def _update_execution(
         self,
         execution_id: str,

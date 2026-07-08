@@ -9,6 +9,8 @@
       const state = window.AppState
       const stats = ref({ tasks: 0, skills: 0, workflows: 0, todayCalls: 0 })
       const recentTasks = ref([])
+      const templates = ref([])
+      const instantiating = ref('')
       const loading = ref(true)
 
       const statCards = computed(() => [
@@ -22,12 +24,13 @@
         loading.value = true
         try {
           // 并行加载各项数据
-          const [tasksRes, skillsRes, workflowsRes, auditRes] = await Promise.allSettled([
+          const [tasksRes, skillsRes, workflowsRes, auditRes, tplRes] = await Promise.allSettled([
             window.API.get('/agent/tasks', { page: 1, page_size: 5 }),
             window.API.get('/skills', { page: 1, page_size: 1 }),
             window.API.get('/workflows', { page: 1, page_size: 1 }),
             state.hasRole('admin') || state.hasRole('manager')
-              ? window.API.get('/audit/stats', { group_by: 'day' }) : Promise.resolve(null)
+              ? window.API.get('/audit/stats', { group_by: 'day' }) : Promise.resolve(null),
+            window.API.get('/workflows/templates', { page: 1, page_size: 4 }),
           ])
           // 任务列表
           if (tasksRes.status === 'fulfilled' && tasksRes.value) {
@@ -40,6 +43,9 @@
             const today = new Date().toISOString().slice(0, 10)
             const todayStat = (auditRes.value.stats || []).find(s => s.key === today)
             stats.value.todayCalls = todayStat?.count || 0
+          }
+          if (tplRes.status === 'fulfilled' && tplRes.value) {
+            templates.value = (tplRes.value.items || []).slice(0, 4)
           }
         } finally {
           loading.value = false
@@ -67,6 +73,21 @@
       ]
       const showOnboarding = computed(() => !loading.value && stats.value.tasks === 0)
 
+      // Sprint 6.2: 一键实例化模板（快速上手自动化）
+      const instantiateTemplate = async (tpl) => {
+        if (instantiating.value) return
+        instantiating.value = tpl.id
+        try {
+          const res = await window.API.post('/workflows/templates/' + tpl.id + '/instantiate', {
+            name: '', trigger_overrides: { type: (tpl.trigger_template || {}).type || 'manual' },
+          })
+          state.notify('已创建工作流：' + (res.name || tpl.name) + '，可前往配置触发器', 'success')
+          state.navigate('/workflows')
+        } catch (e) {
+          state.notify('创建失败：' + (e.message || '未知错误'), 'error')
+        } finally { instantiating.value = '' }
+      }
+
       onMounted(async () => {
         await loadDashboard()
         // Round 4: 首次访问且无任务时，延迟 800ms 自动触发新手引导（等数据加载完）
@@ -75,7 +96,11 @@
         }
       })
 
-      return { stats, statCards, recentTasks, loading, quickActions, onboardingSteps, showOnboarding, startTour, state, loadDashboard }
+      return {
+        stats, statCards, recentTasks, templates, instantiating, loading,
+        quickActions, onboardingSteps, showOnboarding, startTour,
+        instantiateTemplate, state, loadDashboard,
+      }
     },
     template: `
       <div class="space-y-6">
@@ -121,6 +146,31 @@
               <div class="text-3xl mb-2 group-hover:scale-110 transition-transform" aria-hidden="true">{{ a.icon }}</div>
               <p class="text-sm font-medium text-ink">{{ a.label }}</p>
             </button>
+          </div>
+        </base-card>
+
+        <!-- Sprint 6.2: 常用自动化模板（一键上手） -->
+        <base-card v-if="templates.length > 0" title="⚡ 常用自动化模板" subtitle="一键实例化为工作流，快速上手自动化">
+          <template #action>
+            <button class="btn btn-secondary text-sm" @click="state.navigate('/templates')">查看全部 →</button>
+          </template>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div v-for="tpl in templates" :key="tpl.id"
+                 class="card p-4 hover:shadow-md hover:border-brand transition-all flex flex-col group">
+              <div class="flex items-start justify-between mb-2">
+                <div class="text-2xl" aria-hidden="true">{{ tpl.category === 'daily' ? '☀️' : tpl.category === 'weekly' ? '📆' : tpl.category === 'report' ? '📄' : tpl.category === 'notification' ? '🔔' : tpl.category === 'communication' ? '💬' : '⚙️' }}</div>
+                <span v-if="tpl.usage_count > 0" class="text-xs text-ink-subtle">用过 {{ tpl.usage_count }} 次</span>
+              </div>
+              <p class="font-medium text-ink group-hover:text-brand text-sm">{{ tpl.name }}</p>
+              <p class="text-xs text-ink-muted mt-1 flex-1 line-clamp-2">{{ tpl.description || '无描述' }}</p>
+              <button class="btn btn-primary text-xs mt-3 w-full"
+                      :disabled="instantiating === tpl.id"
+                      @click="instantiateTemplate(tpl)"
+                      :aria-label="'一键创建工作流：' + tpl.name">
+                <span v-if="instantiating === tpl.id">创建中…</span>
+                <span v-else>⚡ 一键创建</span>
+              </button>
+            </div>
           </div>
         </base-card>
 

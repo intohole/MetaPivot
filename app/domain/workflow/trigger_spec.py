@@ -31,6 +31,7 @@ class TriggerSpec:
     webhook_token: Optional[str] = None    # webhook 类型（创建后回填）
     im_keyword: Optional[str] = None       # im_message 类型（消息包含此关键词则触发）
     im_chat_filter: Optional[str] = None   # im_message 类型（限定会话 ID，空表示不限）
+    im_callback: bool = True              # Sprint 6.3: IM 触发后执行结果回传 IM（False=不回传，用 send_message 节点自行处理）
     event_filter: dict = field(default_factory=dict)  # 预留：事件过滤
 
     def to_dict(self) -> dict:
@@ -44,6 +45,9 @@ class TriggerSpec:
             d["im_keyword"] = self.im_keyword
         if self.im_chat_filter:
             d["im_chat_filter"] = self.im_chat_filter
+        # im_callback 默认 True，仅 False 时持久化（减少存储噪音）
+        if not self.im_callback:
+            d["im_callback"] = False
         if self.event_filter:
             d["event_filter"] = self.event_filter
         return d
@@ -98,6 +102,8 @@ def parse_trigger(trigger_dict: Optional[dict]) -> TriggerSpec:
             )
         spec.im_keyword = keyword
         spec.im_chat_filter = (trigger_dict.get("im_chat_filter") or "").strip() or None
+        # Sprint 6.3: im_callback 默认 True，显式传 False 才关闭
+        spec.im_callback = trigger_dict.get("im_callback", True)
 
     spec.event_filter = trigger_dict.get("event_filter", {})
     return spec

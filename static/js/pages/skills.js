@@ -110,6 +110,13 @@
         }
       }
 
+      // Sprint 6.1: 检测 skill 是否被熔断（changelog 末尾 circuit_breaker 标记 + enabled=false）
+      const isCircuitBroken = (row) => {
+        if (!row.changelog || !Array.isArray(row.changelog) || row.changelog.length === 0) return false
+        const last = row.changelog[row.changelog.length - 1]
+        return last && last.source === 'circuit_breaker'
+      }
+
       const removeRow = async (row) => {
         const action = await state.confirmAction({
           title: '确认删除', message: '确认删除 Skill "' + row.name + '"？此操作不可撤销。',
@@ -176,7 +183,7 @@
       return {
         list, total, page, pageSize, keyword, sourceType, scope, loading, columns,
         showForm, editingId, form, isAdmin, showTest, testingSkill, testInput, testResult,
-        loadList, openCreate, openEdit, submitForm, toggleEnable, removeRow,
+        loadList, openCreate, openEdit, submitForm, toggleEnable, removeRow, isCircuitBroken,
         openTest, runTest, onPageChange, onSearch, onScopeChange, publishToTeam, state
       }
     },
@@ -217,8 +224,11 @@
             </template>
             <template #call_count="{ value }"><span class="text-sm">{{ value || 0 }}</span></template>
             <template #enabled="{ row }">
-              <switch v-if="isAdmin" :model-value="row.enabled" @update:model-value="() => toggleEnable(row)" :aria-label="(row.enabled ? '禁用' : '启用') + ' ' + row.name" size="sm" />
-              <span v-else :class="['badge', row.enabled ? 'badge-success' : 'badge-muted']">{{ row.enabled ? '启用' : '禁用' }}</span>
+              <div class="flex items-center gap-1">
+                <switch v-if="isAdmin" :model-value="row.enabled" @update:model-value="() => toggleEnable(row)" :aria-label="(row.enabled ? '禁用' : '启用') + ' ' + row.name" size="sm" />
+                <span v-else :class="['badge', row.enabled ? 'badge-success' : 'badge-muted']">{{ row.enabled ? '启用' : '禁用' }}</span>
+                <span v-if="!row.enabled && isCircuitBroken(row)" class="badge badge-danger" title="失败率过高已自动禁用，修复后可手动启用">⛔ 熔断</span>
+              </div>
             </template>
             <template #actions="{ row }">
               <div class="flex gap-1 justify-center">

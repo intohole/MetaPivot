@@ -16,7 +16,7 @@
 
       const showForm = ref(false)
       const editingId = ref('')
-      const form = reactive({ name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true, trigger: { type: 'manual', cron_expr: '', im_keyword: '', im_chat_filter: '' } })
+      const form = reactive({ name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true, trigger: { type: 'manual', cron_expr: '', im_keyword: '', im_chat_filter: '', im_callback: true } })
       const editorMode = ref('visual')  // visual | json
       const wfContainer = ref(null)
       const wfPalette = ref(null)
@@ -69,7 +69,7 @@
       }
 
       const openCreate = () => {
-        Object.assign(form, { name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true, trigger: { type: 'manual', cron_expr: '', im_keyword: '', im_chat_filter: '' } })
+        Object.assign(form, { name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true, trigger: { type: 'manual', cron_expr: '', im_keyword: '', im_chat_filter: '', im_callback: true } })
         editingId.value = ''
         editorMode.value = 'visual'
         showForm.value = true
@@ -78,11 +78,11 @@
 
       const openEdit = (row) => {
         const def = row.definition || { nodes: [], edges: [], variables: [] }
-        const trig = row.trigger || { type: 'manual', cron_expr: '', im_keyword: '', im_chat_filter: '' }
+        const trig = row.trigger || { type: 'manual', cron_expr: '', im_keyword: '', im_chat_filter: '', im_callback: true }
         Object.assign(form, {
           name: row.name, description: row.description || '',
           definition: JSON.stringify(def, null, 2), enabled: row.enabled,
-          trigger: { type: trig.type || 'manual', cron_expr: trig.cron_expr || '', im_keyword: trig.im_keyword || '', im_chat_filter: trig.im_chat_filter || '' }
+          trigger: { type: trig.type || 'manual', cron_expr: trig.cron_expr || '', im_keyword: trig.im_keyword || '', im_chat_filter: trig.im_chat_filter || '', im_callback: trig.im_callback !== false }
         })
         editingId.value = row.id
         editorMode.value = 'visual'
@@ -305,6 +305,10 @@
                   <label for="im-chat-filter" class="block text-xs font-medium text-ink mb-1">限定会话 ID（可选）</label>
                   <input id="im-chat-filter" type="text" v-model="form.trigger.im_chat_filter" class="input" placeholder="留空表示所有会话都触发" />
                 </div>
+                <label class="flex items-center gap-2 pt-1">
+                  <input type="checkbox" v-model="form.trigger.im_callback" />
+                  <span class="text-xs text-ink">执行结果自动回传 IM 会话（关闭则需在工作流内用「发送消息」节点自行处理）</span>
+                </label>
               </div>
             </div>
             <div>

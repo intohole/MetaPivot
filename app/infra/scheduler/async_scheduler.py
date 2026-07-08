@@ -273,10 +273,12 @@ class AsyncScheduler(IScheduler):
         """执行单个定时任务（调用 AgentService）
 
         失败时调用 _handle_failure 进行重试或入 DLQ。
+        Sprint 6.4: IM 渠道任务触发后异步推送结果到原会话（fire-and-forget）。
         """
+        agent_task_id = ""
         try:
             from app.service.agent_service import agent_service
-            await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 agent_service.start_task(
                     message=message, channel=channel,
                     chat_id=chat_id or "", user_id=user_id or "",
@@ -284,11 +286,18 @@ class AsyncScheduler(IScheduler):
                 ),
                 timeout=_TRIGGER_TIMEOUT,
             )
-            log.info("Scheduled task executed: id={}", task_id)
+            agent_task_id = result.get("task_id", "") if isinstance(result, dict) else ""
+            log.info("Scheduled task executed: id={} agent_task={}", task_id, agent_task_id)
         except Exception as e:
             log.exception("Scheduled task execution failed: id={} err={}", task_id, e)
             await self._handle_failure(task_id, {"code": "EXEC_ERROR", "message": str(e)})
             return
+
+        # Sprint 6.4: IM 渠道的定时任务 → 异步推送 Agent 结果到原会话（不阻塞调度循环）
+        if agent_task_id and chat_id and channel and channel != "api":
+            asyncio.create_task(self._push_result_to_im(
+                agent_task_id, channel, chat_id, message,
+            ))
 
         # 更新状态：周期性 → 计算下次执行；一次性 → completed
         async with get_db_session() as session:
@@ -309,6 +318,19 @@ class AsyncScheduler(IScheduler):
                 task.status = "pending"
                 task.next_run_at = self._compute_next_run(recurring)
             await session.flush()
+
+    async def _push_result_to_im(
+        self, agent_task_id: str, channel: str, chat_id: str, message: str,
+    ) -> None:
+        """Sprint 6.4: 异步推送 Agent 结果到 IM（fire-and-forget 包装）"""
+        try:
+            from app.service.im_push_service import im_push_service
+            await im_push_service.push_agent_result(
+                task_id=agent_task_id, channel=channel,
+                chat_id=chat_id, trigger_message=message,
+            )
+        except Exception as e:
+            log.warning("IM push for agent task {} failed: {}", agent_task_id, e)
 
     async def _handle_failure(self, task_id: int, error: dict) -> None:
         """失败处理：重试（指数退避）或进入 DLQ

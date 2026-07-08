@@ -116,6 +116,7 @@ class Settings(BaseSettings):
     agent_task_timeout: int = 300  # 任务级超时（秒），asyncio.wait_for 包裹 runner
     agent_judge_k: int = 4  # L4 Judge 评估间隔（每 K 步评估一次）
     agent_verifier_enabled: bool = True  # Phase 4.2: 结果验证器（渐进增强，LLM 不可用时降级跳过）
+    skill_circuit_breaker_enabled: bool = True  # Sprint 6.1: Skill 自动熔断（失败率过高自动禁用）
 
     # OTel + Langfuse 可观测性（Phase 4）
     otel_enabled: bool = False  # OTel SDK 总开关（False 时使用 NoopTracer，零依赖）
