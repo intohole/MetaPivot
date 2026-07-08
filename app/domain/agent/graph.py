@@ -161,6 +161,39 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
                 for ev in _drain_events(state):
                     yield ev
 
+        # Phase 4.2: 结果验证（渐进增强 — 回复生成后、final_result 前验证质量）
+        # LLM 不可用时 verifier 内部降级为 VERIFIED，不阻断主链路
+        if state.status == AgentStatus.COMPLETED and settings.agent_verifier_enabled:
+            try:
+                from app.domain.agent.verifier import get_verifier
+                from app.domain.contracts.verifier import VerifyDecision
+                verify_result = await get_verifier().verify(state)
+                for ev in _drain_events(state):
+                    yield ev
+                if verify_result.decision == VerifyDecision.FAILED:
+                    state.status = AgentStatus.FAILED
+                    state.error = {
+                        "code": "VERIFIER_FAILED",
+                        "message": f"结果验证失败: {verify_result.reason}",
+                    }
+                    yield _event("final_result", {
+                        "answer": state.final_answer or "",
+                        "result": state.result,
+                        "error": state.error,
+                    })
+                    return
+                if verify_result.decision == VerifyDecision.NEEDS_REVISION and verify_result.caveats:
+                    caveat_text = "\n\n---\n⚠️ **验证提示**：\n" + "\n".join(
+                        f"- {c}" for c in verify_result.caveats
+                    )
+                    state.final_answer = (state.final_answer or "") + caveat_text
+                    state.result = {
+                        **(state.result or {}),
+                        "verification_caveats": verify_result.caveats,
+                    }
+            except Exception as e:
+                log.warning("Verifier crashed, skip verification: {}", e)
+
         yield _event("final_result", {
             "answer": state.final_answer,
             "result": state.result,

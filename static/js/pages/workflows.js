@@ -16,7 +16,7 @@
 
       const showForm = ref(false)
       const editingId = ref('')
-      const form = reactive({ name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true, trigger: { type: 'manual', cron_expr: '' } })
+      const form = reactive({ name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true, trigger: { type: 'manual', cron_expr: '', im_keyword: '', im_chat_filter: '' } })
       const editorMode = ref('visual')  // visual | json
       const wfContainer = ref(null)
       const wfPalette = ref(null)
@@ -69,7 +69,7 @@
       }
 
       const openCreate = () => {
-        Object.assign(form, { name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true, trigger: { type: 'manual', cron_expr: '' } })
+        Object.assign(form, { name: '', description: '', definition: '{"nodes":[],"edges":[],"variables":[]}', enabled: true, trigger: { type: 'manual', cron_expr: '', im_keyword: '', im_chat_filter: '' } })
         editingId.value = ''
         editorMode.value = 'visual'
         showForm.value = true
@@ -78,10 +78,11 @@
 
       const openEdit = (row) => {
         const def = row.definition || { nodes: [], edges: [], variables: [] }
+        const trig = row.trigger || { type: 'manual', cron_expr: '', im_keyword: '', im_chat_filter: '' }
         Object.assign(form, {
           name: row.name, description: row.description || '',
           definition: JSON.stringify(def, null, 2), enabled: row.enabled,
-          trigger: row.trigger || { type: 'manual', cron_expr: '' }
+          trigger: { type: trig.type || 'manual', cron_expr: trig.cron_expr || '', im_keyword: trig.im_keyword || '', im_chat_filter: trig.im_chat_filter || '' }
         })
         editingId.value = row.id
         editorMode.value = 'visual'
@@ -233,7 +234,7 @@
               <p class="text-xs text-ink-muted">{{ row.description || '无描述' }}</p>
             </template>
             <template #trigger="{ row }">
-              <span :class="['badge', row.trigger?.type === 'webhook' ? 'badge-info' : row.trigger?.type === 'schedule' ? 'badge-warning' : 'badge-muted']">{{ row.trigger?.type || 'manual' }}</span>
+              <span :class="['badge', row.trigger?.type === 'webhook' ? 'badge-info' : row.trigger?.type === 'schedule' ? 'badge-warning' : row.trigger?.type === 'im_message' ? 'badge-success' : 'badge-muted']" :title="row.trigger?.im_keyword ? ('关键词: ' + row.trigger.im_keyword) : ''">{{ {manual:'手动', webhook:'Webhook', schedule:'定时', im_message:'IM消息'}[row.trigger?.type] || '手动' }}</span>
             </template>
             <template #enabled="{ row }">
               <switch v-if="isAdmin" :model-value="row.enabled" @update:model-value="() => toggleEnabled(row)" :aria-label="(row.enabled ? '禁用' : '启用') + ' ' + row.name" size="sm" />
@@ -287,9 +288,24 @@
                   <input type="radio" v-model="form.trigger.type" value="schedule" />
                   <span class="text-sm">定时</span>
                 </label>
+                <label class="flex items-center gap-1">
+                  <input type="radio" v-model="form.trigger.type" value="im_message" />
+                  <span class="text-sm">IM消息</span>
+                </label>
                 <input v-if="form.trigger.type === 'schedule'" type="text" v-model="form.trigger.cron_expr" class="input flex-1 min-w-[180px] font-mono text-xs" placeholder="*/5 * * * *（分 时 日 月 周）" />
               </div>
               <p v-if="form.trigger.type === 'webhook'" class="mt-1 text-xs text-ink-subtle">保存后自动生成 Webhook URL（在 Webhook 管理页查看）</p>
+              <div v-if="form.trigger.type === 'im_message'" class="mt-2 space-y-2 p-3 bg-surface-muted rounded">
+                <div>
+                  <label for="im-keyword" class="block text-xs font-medium text-ink mb-1">触发关键词 *</label>
+                  <input id="im-keyword" type="text" v-model="form.trigger.im_keyword" class="input" placeholder="如：周报、站会、请假（IM 消息包含此词则触发）" />
+                  <p class="mt-1 text-xs text-ink-subtle">大小写不敏感；消息文本包含此关键词即触发工作流</p>
+                </div>
+                <div>
+                  <label for="im-chat-filter" class="block text-xs font-medium text-ink mb-1">限定会话 ID（可选）</label>
+                  <input id="im-chat-filter" type="text" v-model="form.trigger.im_chat_filter" class="input" placeholder="留空表示所有会话都触发" />
+                </div>
+              </div>
             </div>
             <div>
               <div class="flex items-center justify-between mb-2">

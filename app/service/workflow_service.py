@@ -105,6 +105,8 @@ class WorkflowService:
                 if hasattr(wf, k) and v is not None:
                     setattr(wf, k, v)
             await session.flush()
+            # refresh 以获取 onupdate=func.now() 生成的 updated_at（避免 async lazy load 报错）
+            await session.refresh(wf)
             return {"id": wf.id, "updated_at": wf.updated_at.isoformat() if wf.updated_at else None}
 
     async def delete_workflow(self, workflow_id: str) -> dict:

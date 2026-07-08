@@ -124,6 +124,14 @@
           case 'tool_blocked': pushStep('tool_blocked', data); break
           case 'context_trimmed': pushStep('context_trimmed', data); break
           case 'reflected': pushStep('reflected', data); break
+          case 'verified':
+            // Phase 4.2: 结果验证提示（NEEDS_REVISION 时通知用户）
+            if (data.decision === 'needs_revision' && data.caveats && data.caveats.length) {
+              state.notify('⚠️ 结果验证提示：' + data.caveats.join('；'), 'warning', 5000)
+            } else if (data.decision === 'failed') {
+              state.notify('❌ 结果验证失败：' + (data.reason || ''), 'error', 5000)
+            }
+            break
           case 'token': streamingText.value += data.text || ''; scrollToBottom(); break
           case 'human_confirm_required': waitingConfirm.value = true; taskStatus.value = 'waiting_confirm'; break
           case 'final_result':

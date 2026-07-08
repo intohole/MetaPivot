@@ -21,6 +21,7 @@ from app.domain.agent.stream import stream_manager
 from app.domain.contracts.judge import IJudge
 from app.domain.contracts.memory import IMemoryStore
 from app.domain.contracts.retrieval import IQueryRouter, IRetriever
+from app.domain.contracts.verifier import IVerifier
 from app.infra.db.models_core import AgentTaskORM
 from app.infra.db.session import get_db_session
 from app.service.agent_persister import (
@@ -76,6 +77,8 @@ class AgentService:
     # Phase 4.1: Agentic RAG 三库统一检索（DI 注入；未注入时走旧 memory search_semantic 逻辑）
     _retriever: Optional[IRetriever] = None
     _query_router: Optional[IQueryRouter] = None
+    # Phase 4.2: 结果验证器（DI 注入，保留扩展点；当前 graph.py 直接用 get_verifier 单例）
+    _verifier: Optional[IVerifier] = None
 
     def set_memory_store(self, store: IMemoryStore) -> None:
         """DI 注入记忆存储（由 main.py lifespan 调用）
@@ -109,6 +112,16 @@ class AgentService:
         """Phase 4.1: DI 注入查询路由器（由 main.py lifespan 调用）"""
         self._query_router = router
         log.info("QueryRouter injected into AgentService")
+
+    def set_verifier(self, verifier: IVerifier) -> None:
+        """Phase 4.2: DI 注入结果验证器（由 main.py lifespan 调用）
+
+        保留扩展点：当前 graph.py 直接 from app.domain.agent.verifier import get_verifier
+        调用单例；后续若需多 backend（如规则 Verifier / 远程验证服务），
+        可通过此方法注入自定义 IVerifier 实现。
+        """
+        self._verifier = verifier
+        log.info("Verifier injected into AgentService")
 
     # ============ 任务生命周期 ============
 

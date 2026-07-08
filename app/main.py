@@ -81,6 +81,11 @@ async def lifespan(app: FastAPI):
     # 注册 IM 消息处理器（桥接 ChannelService ↔ AgentService）
     from app.service.message_handler import register_to_channel_service
     await register_to_channel_service()
+    # 双向流: 注入 IM 消息触发器（IM 消息 → Workflow，与 Agent 处理并行）
+    from app.service.channel_service import channel_service
+    from app.service.im_trigger_service import im_trigger_service
+    channel_service.set_im_trigger(im_trigger_service)
+    log.info("IM message trigger bridged (im_message type workflows will auto-trigger)")
 
     # 启动IM渠道（异步任务）
     from app.service.channel_manager import start_channels

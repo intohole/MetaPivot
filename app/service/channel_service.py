@@ -34,16 +34,34 @@ class ChannelService:
     def __init__(self) -> None:
         self._handler: Optional[MessageHandler] = None
         self._pending_tasks: set = set()  # 持有后台任务引用，避免被GC
+        # Phase 双向流: IM 消息触发器（DI 注入，未注入时跳过 workflow 触发）
+        self._im_trigger: Optional[object] = None
 
     def register_handler(self, handler: MessageHandler) -> None:
         """注册消息处理器（AgentService 初始化时调用）"""
         self._handler = handler
         log.info("Message handler registered: {}", handler.__qualname__)
 
+    def set_im_trigger(self, im_trigger: object) -> None:
+        """DI 注入 IM 消息触发器（由 main.py lifespan 调用）
+
+        注入后每条 IM 消息会尝试匹配并触发 im_message 类型的工作流。
+        未注入时跳过（向后兼容）。
+        """
+        self._im_trigger = im_trigger
+        log.info("IMTrigger injected into ChannelService")
+
     async def dispatch_message(self, msg: UnifiedMessage) -> None:
         """派发 IM 消息到注册的处理器（异步非阻塞）"""
         # 持久化原始消息（即使无处理器也保留）
         await self._persist_message(msg)
+
+        # 双向流: IM 消息 → Workflow 触发（与 Agent 处理并行，互不阻断）
+        if self._im_trigger is not None:
+            trigger_task = self._im_trigger.match_and_trigger(msg)
+            bg_trigger = _create_background_task(trigger_task, msg.msg_id + ":im_trigger")
+            self._pending_tasks.add(bg_trigger)
+            bg_trigger.add_done_callback(self._pending_tasks.discard)
 
         if self._handler is None:
             log.warning(
