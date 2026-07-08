@@ -50,7 +50,7 @@ async def retry_dlq(
     scheduler = await get_scheduler()
     success = await scheduler.retry_failed(task_id, user_id=user.user_id)
     if not success:
-        raise AppError(ErrorCode.NOT_FOUND, "任务不存在或无权操作", 404)
+        raise AppError(ErrorCode.RESOURCE_NOT_FOUND, "任务不存在或无权操作", 404)
     return ok({"task_id": task_id, "status": "pending"}, request)
 
 
@@ -65,5 +65,5 @@ async def cancel_dlq(
     scheduler = await get_scheduler()
     success = await scheduler.cancel(task_id)
     if not success:
-        raise AppError(ErrorCode.NOT_FOUND, "任务不存在或已执行", 404)
+        raise AppError(ErrorCode.RESOURCE_NOT_FOUND, "任务不存在或已执行", 404)
     return ok({"task_id": task_id, "status": "cancelled"}, request)

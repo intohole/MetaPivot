@@ -106,14 +106,19 @@ class AuditService:
         start = self._parse_time(start_time) if start_time else datetime.now() - timedelta(days=30)
         end = self._parse_time(end_time) if end_time else datetime.now()
 
+        # 按天聚合：SQLite 用 func.date()，PostgreSQL 用 date_trunc
+        from app.utils.config import settings
         if group_by == "day":
-            date_expr = func.date_trunc("day", AuditLogORM.created_at).label("key")
+            if settings.db_backend == "sqlite":
+                date_expr = func.date(AuditLogORM.created_at).label("key")
+            else:
+                date_expr = func.date_trunc("day", AuditLogORM.created_at).label("key")
         elif group_by == "user":
             date_expr = AuditLogORM.user_id.label("key")
         elif group_by == "skill":
             date_expr = AuditLogORM.skill_id.label("key")
         else:
-            date_expr = func.date_trunc("day", AuditLogORM.created_at).label("key")
+            date_expr = func.date(AuditLogORM.created_at).label("key") if settings.db_backend == "sqlite" else func.date_trunc("day", AuditLogORM.created_at).label("key")
 
         async with get_db_session() as session:
             stmt = (

@@ -221,7 +221,7 @@ async def reject_draft(
 async def list_revisions(
     request: Request,
     skill_id: str = "",
-    status: str = Query("", pattern="^(pending|approved|rejected|auto_merged)$"),
+    status: str = Query("", pattern="^(|pending|approved|rejected|auto_merged)$"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     user: CurrentUser = Depends(require_permission("skill:read")),

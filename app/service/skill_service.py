@@ -129,6 +129,8 @@ class SkillService:
                 if hasattr(skill, k) and v is not None:
                     setattr(skill, k, v)
             await session.flush()
+            # onupdate=func.now() 的属性在 flush 后需 refresh 才能访问，否则触发 greenlet lazy-load 错误
+            await session.refresh(skill)
             return {"id": skill.id, "updated_at": skill.updated_at.isoformat() if skill.updated_at else None}
 
     async def delete_skill(self, skill_id: str) -> dict:

@@ -82,7 +82,7 @@ async def get_schedule(
     pending = await scheduler.list_pending(user_id=user.user_id, limit=1000)
     item = next((t for t in pending if t.get("id") == task_id), None)
     if item is None:
-        raise AppError(ErrorCode.NOT_FOUND, "定时任务不存在或已执行", 404)
+        raise AppError(ErrorCode.RESOURCE_NOT_FOUND, "定时任务不存在或已执行", 404)
     return ok(item, request)
 
 
