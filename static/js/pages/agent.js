@@ -14,6 +14,7 @@
       const taskSteps = reactive([])
       const waitingConfirm = ref(false)
       const history = ref([])
+      const historyLoading = ref(false)
       const streaming = ref(false)
       const streamingText = ref('')  // 流式 reply 累积文本（token 事件拼接）
       const reconnecting = ref(false)  // SSE 断线重连中
@@ -31,12 +32,13 @@
       const renderMarkdown = window.renderMarkdown || ((t) => t)
 
       const loadHistory = async () => {
+        historyLoading.value = true
         try {
           const res = await window.API.get('/agent/tasks', { page: 1, page_size: 20 })
           history.value = res.items || []
         } catch (e) {
           state.notify('加载历史失败：' + (e.message || '未知错误'), 'error')
-        }
+        } finally { historyLoading.value = false }
       }
 
       const scrollToBottom = () => {
@@ -329,7 +331,7 @@
 
       return {
         messages, inputMsg, currentTaskId, taskStatus, taskSteps, waitingConfirm,
-        history, streaming, streamingText, reconnecting, reconnectAttempt, canSend,
+        history, historyLoading, streaming, streamingText, reconnecting, reconnectAttempt, canSend,
         chatBox, columns, renderMarkdown,
         sendMessage, handleConfirm, cancelTask, viewHistory, manualReconnect, state,
         showPostActions, saveAsSkill, rerunTask, retryTask,
@@ -424,7 +426,7 @@
         <div>
           <base-card title="任务历史">
             <button class="btn btn-ghost text-sm mb-3" @click="loadHistory">⟳ 刷新</button>
-            <base-table :columns="columns" :rows="history" empty="暂无历史">
+            <base-table :columns="columns" :rows="history" :loading="historyLoading" empty="暂无历史">
               <template #task_id="{ value }">
                 <button class="font-mono text-xs text-brand hover:underline" @click="viewHistory(history.find(h => h.task_id === value))">
                   {{ value?.slice(0, 8) }}...
