@@ -194,3 +194,45 @@ def get_verifier() -> LLMVerifier:
     if _verifier is None:
         _verifier = LLMVerifier()
     return _verifier
+
+
+async def post_verify(state) -> tuple[list[dict], bool]:
+    """Phase 4.2: 执行后结果验证（Sprint 7.5 从 graph.py 抽离）
+
+    在 Agent 回复生成后、final_result 事件前验证质量。
+    LLM 不可用时 verifier 内部降级为 VERIFIED，不阻断主链路（渐进增强语义）。
+
+    Returns:
+        (events, should_return) — events 为待 yield 的 SSE 事件列表；
+        should_return=True 时调用方应立即 return（如 FAILED 决策）。
+    """
+    events: list[dict] = []
+    verify_result = await get_verifier().verify(state)
+    # drain verify() 内部 add_event 累积的节点级事件
+    events.extend(list(state.events))
+    state.events.clear()
+
+    if verify_result.decision == VerifyDecision.FAILED:
+        from app.domain.agent.state import AgentStatus
+        state.status = AgentStatus.FAILED
+        state.error = {
+            "code": "VERIFIER_FAILED",
+            "message": f"结果验证失败: {verify_result.reason}",
+        }
+        events.append({"type": "final_result", "data": {
+            "answer": state.final_answer or "",
+            "result": state.result,
+            "error": state.error,
+        }})
+        return events, True
+
+    if verify_result.decision == VerifyDecision.NEEDS_REVISION and verify_result.caveats:
+        caveat_text = "\n\n---\n⚠️ **验证提示**：\n" + "\n".join(
+            f"- {c}" for c in verify_result.caveats
+        )
+        state.final_answer = (state.final_answer or "") + caveat_text
+        state.result = {
+            **(state.result or {}),
+            "verification_caveats": verify_result.caveats,
+        }
+    return events, False

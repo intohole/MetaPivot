@@ -20,9 +20,8 @@ from app.domain.agent.nodes import (
     planner_node,
     reflector_node,
 )
-from app.domain.agent.replier import replier_node
+from app.domain.agent.replier import replier_node, stream_final_reply
 from app.domain.agent.scheduler_node import scheduler_node
-from app.domain.agent.prompts import REPLY_PROMPT, SYSTEM_PROMPT
 from app.domain.agent.state import AgentMode, AgentState, AgentStatus
 from app.utils.config import settings
 from app.utils.logger import get_logger
@@ -110,6 +109,16 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
                     "step": state.current_step,
                     "status": state.status.value,
                 })
+                # Sprint 7.3: 长对话摘要压缩（执行中消息数超阈值时触发）
+                if state.status in (AgentStatus.EXECUTING, AgentStatus.REFLECTING):
+                    try:
+                        from app.domain.agent.context_window import maybe_summarize_in_execution
+                        from app.infra.llm.provider import get_llm
+                        if await maybe_summarize_in_execution(state, get_llm()):
+                            for ev in _drain_events(state):
+                                yield ev
+                    except Exception as e:
+                        log.warning("Summarize in execution failed: {}", e)
                 # HITL 暂停
                 if state.status == AgentStatus.WAITING_CONFIRM:
                     yield _event("human_confirm_required", state.pending_confirm or {})
@@ -151,8 +160,8 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
             return  # 不覆盖 FAILED 状态
 
         if state.status != AgentStatus.COMPLETED:
-            # 尝试流式回复，逐 token 推送
-            async for token_event in _stream_final_reply(state):
+            # 尝试流式回复，逐 token 推送（Sprint 7.5: 迁至 replier.stream_final_reply）
+            async for token_event in stream_final_reply(state):
                 yield token_event
 
             # 流式失败（state 仍非 COMPLETED），降级为非流式
@@ -162,35 +171,15 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
                     yield ev
 
         # Phase 4.2: 结果验证（渐进增强 — 回复生成后、final_result 前验证质量）
-        # LLM 不可用时 verifier 内部降级为 VERIFIED，不阻断主链路
+        # Sprint 7.5: 抽离到 verifier.post_verify，保持 graph.py ≤ 300 行
         if state.status == AgentStatus.COMPLETED and settings.agent_verifier_enabled:
             try:
-                from app.domain.agent.verifier import get_verifier
-                from app.domain.contracts.verifier import VerifyDecision
-                verify_result = await get_verifier().verify(state)
-                for ev in _drain_events(state):
+                from app.domain.agent.verifier import post_verify
+                evs, should_return = await post_verify(state)
+                for ev in evs:
                     yield ev
-                if verify_result.decision == VerifyDecision.FAILED:
-                    state.status = AgentStatus.FAILED
-                    state.error = {
-                        "code": "VERIFIER_FAILED",
-                        "message": f"结果验证失败: {verify_result.reason}",
-                    }
-                    yield _event("final_result", {
-                        "answer": state.final_answer or "",
-                        "result": state.result,
-                        "error": state.error,
-                    })
+                if should_return:
                     return
-                if verify_result.decision == VerifyDecision.NEEDS_REVISION and verify_result.caveats:
-                    caveat_text = "\n\n---\n⚠️ **验证提示**：\n" + "\n".join(
-                        f"- {c}" for c in verify_result.caveats
-                    )
-                    state.final_answer = (state.final_answer or "") + caveat_text
-                    state.result = {
-                        **(state.result or {}),
-                        "verification_caveats": verify_result.caveats,
-                    }
             except Exception as e:
                 log.warning("Verifier crashed, skip verification: {}", e)
 
@@ -205,44 +194,6 @@ async def run_agent(state: AgentState) -> AsyncGenerator[dict, None]:
         state.status = AgentStatus.FAILED
         state.error = {"code": "AGENT_ERROR", "message": str(e)}
         yield _event("error", state.error)
-
-
-async def _stream_final_reply(state: AgentState) -> AsyncGenerator[dict, None]:
-    """流式生成最终回复，yield token 事件
-
-    使用 LLM chat_stream 逐 token 输出，提升用户感知速度。
-    失败时静默返回（state.status 不变），由调用方降级为非流式。
-    """
-    from app.infra.llm.provider import get_llm
-
-    llm = get_llm()
-
-    # 构造最终回复的 messages
-    if state.mode == AgentMode.PIPELINE or not state.available_tools:
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": state.original_message},
-        ]
-    elif state.messages:
-        messages = list(state.messages) + [{"role": "user", "content": REPLY_PROMPT}]
-    else:
-        return  # 无可用上下文，降级
-
-    full_answer = ""
-    try:
-        async for token in llm.chat_stream(messages=messages):
-            full_answer += token
-            yield _event("token", {"text": token})
-    except Exception as e:
-        log.warning("Stream reply failed, fallback to non-stream: {}", e)
-        return  # 降级，由调用方走 replier_node
-
-    # 安全加固：流式输出也必须经 sanitize_output 脱敏，防止敏感关键词泄露
-    from app.domain.agent.guardrail import sanitize_output
-    full_answer = sanitize_output(full_answer)
-    state.final_answer = full_answer
-    state.result = {"answer": full_answer}
-    state.status = AgentStatus.COMPLETED
 
 
 async def resume_agent(state: AgentState) -> AsyncGenerator[dict, None]:

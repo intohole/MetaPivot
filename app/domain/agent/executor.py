@@ -4,7 +4,11 @@
 - truncate_tool_output：智能截断工具输出（保护 JSON 结构）
 - execute_tool_call：执行单个工具调用（可并行，无状态副作用）
 - apply_context_trim：裁剪超预算消息（executor/replier 共用）
+
+Sprint 7.2: 工具执行重试 — 瞬时错误（网络/超时）自动重试 2 次，指数退避。
+业务错误（ValueError/KeyError 等）直接失败，不重试。
 """
+import asyncio
 import json
 from datetime import datetime
 from typing import Any, Optional
@@ -13,6 +17,14 @@ from app.domain.agent.state import AgentState, StepRecord
 from app.utils.logger import get_logger
 
 log = get_logger("agent_executor")
+
+# Sprint 7.2: 工具执行重试配置
+_MAX_RETRIES = 2  # 最多重试 2 次（共 3 次尝试）
+_RETRY_BASE_DELAY = 0.5  # 基础延迟（秒），指数退避：0.5s → 1.0s
+# 瞬时错误类型（可安全重试）
+_TRANSIENT_ERROR_TYPES = (asyncio.TimeoutError, ConnectionError, OSError)
+# 异常消息中的瞬时错误关键词
+_TRANSIENT_KEYWORDS = ("timeout", "connection", "temporarily", "retry", "unavailable")
 
 
 def truncate_tool_output(output: Any, max_chars: int = 2000) -> str:
@@ -31,6 +43,17 @@ def truncate_tool_output(output: Any, max_chars: int = 2000) -> str:
             truncated[k] = s[:500] + "...[truncated]" if len(s) > 500 else v
         return json.dumps(truncated, ensure_ascii=False, default=str)
     return text[:max_chars] + "...[truncated]"
+
+
+def _is_transient_error(e: Exception) -> bool:
+    """Sprint 7.2: 判断是否为可重试的瞬时错误（网络/超时/连接类）
+
+    业务错误（ValueError/KeyError/TypeError/PermissionError）不重试。
+    """
+    if isinstance(e, _TRANSIENT_ERROR_TYPES):
+        return True
+    msg = str(e).lower()
+    return any(kw in msg for kw in _TRANSIENT_KEYWORDS)
 
 
 async def execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
@@ -167,15 +190,37 @@ async def execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
         return step
 
     # 实际执行（单独计时，便于拆分 LLM vs 工具耗时）
+    # Sprint 7.2: 瞬时错误自动重试（指数退避），业务错误直接失败
     tool_started = datetime.now()
-    try:
-        result = await skill_service.execute(skill_id, args, user_id=state.user_id)
+    result = None
+    last_error: Optional[Exception] = None
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            result = await skill_service.execute(skill_id, args, user_id=state.user_id)
+            break
+        except Exception as e:
+            last_error = e
+            if attempt < _MAX_RETRIES and _is_transient_error(e):
+                delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                log.warning(
+                    "tool '{}' attempt {}/{} failed (transient), retry in {:.1f}s: {}",
+                    tool_name, attempt + 1, _MAX_RETRIES + 1, delay, e,
+                )
+                state.add_event("tool_retry", {
+                    "tool": tool_name, "attempt": attempt + 1,
+                    "max_attempts": _MAX_RETRIES + 1, "delay_ms": int(delay * 1000),
+                })
+                await asyncio.sleep(delay)
+            else:
+                break  # 业务错误或重试耗尽，不再重试
+
+    if result is not None:
         step.tool_output = result
         step.status = "failed" if "error" in result else "success"
-    except Exception as e:
-        step.tool_output = {"error": str(e)}
+    else:
+        step.tool_output = {"error": str(last_error)}
         step.status = "failed"
-        step.error = str(e)
+        step.error = str(last_error)
     step.tool_duration_ms = int((datetime.now() - tool_started).total_seconds() * 1000)
     step.duration_ms = int((datetime.now() - started).total_seconds() * 1000)
     return step

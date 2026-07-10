@@ -225,3 +225,60 @@ def get_context_window_tokens(model: str = "") -> int:
     if "deepseek" in model_lower:
         return 64_000
     return _DEFAULT_CONTEXT_WINDOW
+
+
+# Sprint 7.3: 执行循环中长对话摘要压缩
+_SUMMARY_MARKER = "【对话摘要】"
+_SUMMARIZE_THRESHOLD = 30  # 消息数超此阈值时触发摘要压缩
+
+
+def inject_summary_to_system(state: Any, summary: str) -> None:
+    """将摘要注入 system 消息（替换旧摘要，避免重复堆积）
+
+    安全策略：只修改 messages[0] 的 content，不改变 messages 结构，
+    避免破坏 tool_call↔tool_result 对（trim_messages 依赖结构完整性）。
+    """
+    if not state.messages or not summary:
+        return
+    sys_msg = state.messages[0]
+    if sys_msg.get("role") != "system":
+        return
+    content = sys_msg.get("content", "")
+    # 移除旧摘要（如有），避免重复堆积
+    if _SUMMARY_MARKER in content:
+        content = content.split(_SUMMARY_MARKER)[0].rstrip()
+    sys_msg["content"] = content + f"\n\n{_SUMMARY_MARKER}\n{summary}"
+
+
+async def maybe_summarize_in_execution(state: Any, llm: "ILLMProvider") -> bool:
+    """Sprint 7.3: 执行循环中长对话摘要压缩
+
+    消息数超 _SUMMARIZE_THRESHOLD 时，用 LLM 压缩旧消息为摘要并注入 system 消息。
+    与任务启动时的 summarize_messages（agent_runner.run_task）互补：
+    - 启动时摘要：压缩历史消息（跨任务记忆）
+    - 执行中摘要：压缩当前任务累积的消息（防止单任务内上下文溢出）
+
+    Returns:
+        True 表示执行了摘要压缩（调用方应 drain 事件到 SSE）
+    """
+    if len(state.messages) <= _SUMMARIZE_THRESHOLD:
+        return False
+    try:
+        summary = await summarize_messages(
+            state.messages, llm, max_messages=_SUMMARIZE_THRESHOLD
+        )
+        if not summary:
+            return False
+        inject_summary_to_system(state, summary)
+        state.add_event("context_summarized", {
+            "message_count": len(state.messages),
+            "summary_length": len(summary),
+        })
+        log.info(
+            "In-execution summarization: {} messages → {} chars summary",
+            len(state.messages), len(summary),
+        )
+        return True
+    except Exception as e:
+        log.warning("In-execution summarization failed: {}", e)
+        return False

@@ -22,6 +22,45 @@
       const chatBox = ref(null)
       let abortSSE = null  // SSE 订阅取消函数
 
+      // Sprint 7.1: 输入历史（终端式 ↑↓ 浏览历史输入）
+      const inputHistory = ref([])  // 已发送消息列表
+      const historyIndex = ref(-1)  // -1=未浏览历史, 0+=当前浏览位置
+      let savedInput = ''  // 浏览历史时暂存当前输入
+
+      // Sprint 7.1: 输入框快捷键处理（Ctrl+Enter 发送 / ↑↓ 浏览历史）
+      const handleInputKeydown = (e) => {
+        // Ctrl/Cmd+Enter → 发送（与 Enter 等效，符合多端 IM 习惯）
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+          e.preventDefault()
+          sendMessage()
+          return
+        }
+        // ↑ → 回溯上一条历史输入
+        if (e.key === 'ArrowUp' && inputHistory.value.length > 0) {
+          e.preventDefault()
+          if (historyIndex.value === -1) {
+            savedInput = inputMsg.value
+            historyIndex.value = inputHistory.value.length - 1
+          } else if (historyIndex.value > 0) {
+            historyIndex.value--
+          }
+          inputMsg.value = inputHistory.value[historyIndex.value]
+          return
+        }
+        // ↓ → 前进到下一条历史输入
+        if (e.key === 'ArrowDown' && historyIndex.value !== -1) {
+          e.preventDefault()
+          if (historyIndex.value < inputHistory.value.length - 1) {
+            historyIndex.value++
+            inputMsg.value = inputHistory.value[historyIndex.value]
+          } else {
+            historyIndex.value = -1
+            inputMsg.value = savedInput
+          }
+          return
+        }
+      }
+
       const columns = [
         { key: 'task_id', label: '任务ID', width: '120px' },
         { key: 'status', label: '状态', width: '100px' },
@@ -50,6 +89,9 @@
         const msg = inputMsg.value.trim()
         messages.push({ role: 'user', content: msg, time: new Date().toLocaleTimeString() })
         inputMsg.value = ''
+        // Sprint 7.1: 记录输入历史 + 重置浏览位置
+        if (msg) inputHistory.value.push(msg)
+        historyIndex.value = -1
         streaming.value = true
         streamingText.value = ''
         taskStatus.value = 'pending'
@@ -108,7 +150,9 @@
             }
             break
           case 'tool_blocked': taskSteps.push({ type: 'blocked', tool: d.tool, reason: d.reason }); break
+          case 'tool_retry': taskSteps.push({ type: 'retry', tool: d.tool, attempt: d.attempt, max_attempts: d.max_attempts }); break
           case 'context_trimmed': taskSteps.push({ type: 'trimmed', before: d.before, after: d.after }); break
+          case 'context_summarized': taskSteps.push({ type: 'summarized', count: d.message_count, length: d.summary_length }); break
           case 'reflected': taskSteps.push({ type: 'reflected', thought: d.correction_hint || d.thought }); break
         }
         scrollToBottom()
@@ -123,8 +167,13 @@
           case 'step_completed': taskStatus.value = 'executing'; pushStep('step_completed', data); break
           case 'llm_call': pushStep('llm_call', data); break
           case 'tool_call': pushStep('tool_call', data); break
-          case 'tool_blocked': pushStep('tool_blocked', data); break
+          case 'tool_blocked': pushStep('tool_blocked', data); break;
+          case 'tool_retry':
+            // Sprint 7.2: 工具重试提示
+            state.notify('🔄 工具 ' + (data.tool || '') + ' 瞬时失败，重试中（第' + (data.attempt || 1) + '次）', 'warning', 3000)
+            pushStep('tool_retry', data); break
           case 'context_trimmed': pushStep('context_trimmed', data); break
+          case 'context_summarized': pushStep('context_summarized', data); break
           case 'reflected': pushStep('reflected', data); break
           case 'verified':
             // Phase 4.2: 结果验证提示（NEEDS_REVISION 时通知用户）
@@ -336,6 +385,7 @@
         sendMessage, handleConfirm, cancelTask, viewHistory, manualReconnect, state,
         showPostActions, saveAsSkill, rerunTask, retryTask,
         showSaveSkill, saveSkillForm, saveSkillDraft, savingSkill, confirmSaveSkill,
+        handleInputKeydown, inputHistory, historyIndex,
       }
     },
     template: `
@@ -407,8 +457,9 @@
             <form @submit.prevent="sendMessage" class="flex gap-2">
               <label for="agent-input" class="sr-only">输入消息</label>
               <input id="agent-input" type="text" v-model="inputMsg"
-                     class="input flex-1" placeholder="输入消息，回车发送..."
-                     :disabled="streaming" :aria-busy="streaming" />
+                     class="input flex-1" placeholder="输入消息，回车发送，↑↓ 浏览历史..."
+                     :disabled="streaming" :aria-busy="streaming"
+                     @keydown="handleInputKeydown" />
               <button type="submit" class="btn btn-primary" :disabled="!canSend" :aria-busy="streaming">
                 {{ streaming ? '执行中...' : '发送' }}
               </button>
