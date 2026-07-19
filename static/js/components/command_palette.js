@@ -23,6 +23,11 @@
       const inputMode = ref(false)
       const inputValue = ref('')
       const pendingCmd = ref(null)
+      // v-model 不能用三元表达式（Vue compiler-42），用 writable computed 桥接两种输入态
+      const currentInput = computed({
+        get: () => inputMode.value ? inputValue.value : query.value,
+        set: (v) => { if (inputMode.value) inputValue.value = v; else query.value = v }
+      })
 
       // 分组计算：无 query 时显示 recent + navigation + actions；有 query 时 fuzzy 过滤
       // NL 中枢：fuzzy 无匹配时，提供自然语言 fallback（发送给 Agent / 搜索知识库）
@@ -156,7 +161,7 @@
       onMounted(() => { /* 父组件通过 ref.open() 调用 */ })
       onUnmounted(() => { if (releaseTrap) releaseTrap() })
 
-      return { visible, query, activeId, rootRef, inputRef, listRef, groups, flatItems, open, close, execute, onKeydown, inputMode, inputValue, pendingCmd, submitInput, cancelInput }
+      return { visible, query, activeId, rootRef, inputRef, listRef, groups, flatItems, open, close, execute, onKeydown, inputMode, inputValue, pendingCmd, submitInput, cancelInput, currentInput }
     },
     template: `
       <transition name="fade">
@@ -167,7 +172,7 @@
               <span v-if="inputMode" aria-hidden="true" class="text-brand">{{ pendingCmd?.icon || '›' }}</span>
               <span v-else aria-hidden="true" class="text-ink-muted">🔍</span>
               <span v-if="inputMode" class="text-sm text-ink-muted whitespace-nowrap">{{ pendingCmd?.label }}</span>
-              <input ref="inputRef" v-model="inputMode ? inputValue : query" type="text"
+              <input ref="inputRef" v-model="currentInput" type="text"
                      :role="inputMode ? 'textbox' : 'combobox'"
                      :aria-expanded="!inputMode" :aria-controls="inputMode ? null : 'cmd-list'"
                      :aria-activedescendant="inputMode ? null : activeId"
