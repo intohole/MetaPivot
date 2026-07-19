@@ -174,6 +174,30 @@
         }
       }
 
+      // HITL 恢复：工作流暂停等待人工决策时，approve 继续 / reject 取消
+      const resumeExecution = async (decision) => {
+        if (!runResult.value?.execution_id) return
+        const act = await state.confirmAction({
+          title: decision === 'approve' ? '批准继续执行' : '拒绝并取消',
+          message: decision === 'approve'
+            ? '确认批准工作流从「' + (runResult.value.current_node || '当前节点') + '」继续执行？'
+            : '确认拒绝并取消此工作流执行？此操作不可撤销。',
+          confirmText: decision === 'approve' ? '批准' : '拒绝',
+          danger: decision === 'reject'
+        })
+        if (act !== 'confirm') return
+        try {
+          const res = await window.API.post(
+            '/workflows/executions/' + runResult.value.execution_id + '/resume',
+            { decision, modifications: {} }
+          )
+          runResult.value = { ...runResult.value, status: res.status, message: decision === 'approve' ? '已恢复执行' : '已取消' }
+          state.notify(decision === 'approve' ? '工作流已恢复执行' : '工作流已取消', 'success')
+        } catch (e) {
+          state.notify('恢复失败：' + (e.message || '未知错误'), 'error')
+        }
+      }
+
       // Sprint 4: 复制工作流为 Skill（主题化 Modal 替代 window.prompt）
       const openSaveSkill = () => {
         if (!runWorkflow.value) return
@@ -254,7 +278,8 @@
         showRun, runWorkflow, runInputs, runResult,
         showSaveSkill, saveSkillForm, savingSkill,
         loadList, openCreate, openEdit, submitForm, removeRow, toggleEnabled,
-        openRun, executeRun, checkRunStatus, openSaveSkill, confirmSaveSkill,
+        openRun, executeRun, checkRunStatus, resumeExecution,
+        openSaveSkill, confirmSaveSkill,
         onPageChange, onSearch, goTemplates, state,
         selectedKeys, bulkLoading, bulkEnable, bulkDisable, bulkDelete
       }
@@ -408,6 +433,11 @@
               </div>
               <p class="text-sm text-blue-900"><strong>状态：</strong>{{ runResult.status }}<span v-if="runResult.current_node"> | 当前节点：{{ runResult.current_node }}</span></p>
               <p class="text-xs text-blue-700 mt-1">{{ runResult.message || (runResult.error ? JSON.stringify(runResult.error) : '点击刷新查看最新状态') }}</p>
+              <!-- HITL 人工决策：工作流暂停等待 approve/reject -->
+              <div v-if="runResult.status === 'paused'" class="flex gap-2 mt-3 pt-3 border-t border-blue-200">
+                <button class="btn btn-primary text-xs" @click="resumeExecution('approve')" title="批准继续执行">✓ 批准继续</button>
+                <button class="btn btn-ghost text-xs text-danger" @click="resumeExecution('reject')" title="拒绝并取消">✕ 拒绝取消</button>
+              </div>
             </div>
           </div>
           <template #footer>

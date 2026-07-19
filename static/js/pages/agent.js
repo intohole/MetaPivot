@@ -283,6 +283,34 @@
 
       // Phase 3: 任务完成后快捷动作
       const showPostActions = ref(false)
+
+      // Agent 记忆搜索（覆盖 POST /agent/memory/search）— 检索长期记忆中的相关片段
+      const showMemory = ref(false)
+      const memoryQuery = ref('')
+      const memoryTopK = ref(5)
+      const memoryResults = ref([])
+      const memoryLoading = ref(false)
+
+      const openMemory = () => {
+        showMemory.value = true
+        memoryResults.value = []
+      }
+
+      const searchMemory = async () => {
+        if (!memoryQuery.value.trim()) { state.notify('请输入搜索关键词', 'error'); return }
+        memoryLoading.value = true
+        try {
+          const res = await window.API.post('/agent/memory/search', {
+            query: memoryQuery.value.trim(),
+            top_k: memoryTopK.value,
+            chat_id: currentTaskId.value || undefined
+          })
+          // 后端返回 list[dict]（裸数组），兼容 {items: [...]} 包装格式
+          memoryResults.value = Array.isArray(res) ? res : (res.items || res.results || [])
+        } catch (e) {
+          state.notify('记忆搜索失败：' + (e.message || '未知错误'), 'error')
+        } finally { memoryLoading.value = false }
+      }
       // Sprint 4: 沉淀 Skill 主题化 Modal（替代 confirmAction 简化弹窗）
       const showSaveSkill = ref(false)
       const saveSkillForm = reactive({ name: '', description: '', tags: [] })
@@ -386,6 +414,7 @@
         showPostActions, saveAsSkill, rerunTask, retryTask,
         showSaveSkill, saveSkillForm, saveSkillDraft, savingSkill, confirmSaveSkill,
         handleInputKeydown, inputHistory, historyIndex,
+        showMemory, memoryQuery, memoryTopK, memoryResults, memoryLoading, openMemory, searchMemory,
       }
     },
     template: `
@@ -476,7 +505,10 @@
         <!-- 任务历史 -->
         <div>
           <base-card title="任务历史">
-            <button class="btn btn-ghost text-sm mb-3" @click="loadHistory">⟳ 刷新</button>
+            <div class="flex gap-2 mb-3">
+              <button class="btn btn-ghost text-sm flex-1" @click="loadHistory">⟳ 刷新</button>
+              <button class="btn btn-ghost text-sm flex-1" @click="openMemory" title="搜索 Agent 长期记忆">🧠 记忆</button>
+            </div>
             <base-table :columns="columns" :rows="history" :loading="historyLoading" empty="暂无历史">
               <template #task_id="{ value }">
                 <button class="font-mono text-xs text-brand hover:underline" @click="viewHistory(history.find(h => h.task_id === value))">
@@ -489,6 +521,38 @@
           </base-card>
         </div>
       </div>
+
+      <!-- Agent 记忆搜索：POST /agent/memory/search -->
+      <base-modal v-model="showMemory" title="🧠 Agent 记忆搜索" width="max-w-lg">
+        <div class="space-y-3">
+          <p class="text-xs text-ink-subtle">检索 Agent 长期记忆中的相关片段，帮助理解上下文延续与历史决策。</p>
+          <div class="flex gap-2">
+            <input v-model="memoryQuery" type="text" class="input flex-1" placeholder="输入搜索关键词..." @keydown.enter="searchMemory" aria-label="搜索关键词" />
+            <select v-model="memoryTopK" class="select w-20" aria-label="返回数量">
+              <option :value="3">3</option>
+              <option :value="5">5</option>
+              <option :value="10">10</option>
+              <option :value="20">20</option>
+            </select>
+            <button class="btn btn-primary" @click="searchMemory" :disabled="memoryLoading">{{ memoryLoading ? '搜索中...' : '🔍' }}</button>
+          </div>
+          <div v-if="memoryLoading" class="text-center py-4 text-sm text-ink-muted">检索中...</div>
+          <div v-else-if="memoryResults.length === 0 && memoryQuery" class="text-center py-4 text-sm text-ink-muted">未找到相关记忆</div>
+          <div v-else class="space-y-2 max-h-[320px] overflow-y-auto">
+            <div v-for="(item, i) in memoryResults" :key="i" class="card p-3 bg-surface-muted">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs text-ink-subtle">#{{ i + 1 }}</span>
+                <span v-if="item.score != null" class="text-xs text-ink-subtle">相关度 {{ (item.score * 100).toFixed(1) }}%</span>
+              </div>
+              <p class="text-sm text-ink whitespace-pre-wrap">{{ item.content || item.text || JSON.stringify(item) }}</p>
+              <p v-if="item.metadata || item.created_at" class="text-xs text-ink-subtle mt-1">{{ item.metadata ? JSON.stringify(item.metadata) : '' }} {{ item.created_at || '' }}</p>
+            </div>
+          </div>
+        </div>
+        <template #footer>
+          <button class="btn btn-secondary" @click="showMemory = false">关闭</button>
+        </template>
+      </base-modal>
 
       <!-- Sprint 4: 沉淀 Skill 主题化 Modal（可编辑草稿字段 + 置信度/理由展示） -->
       <base-modal v-model="showSaveSkill" title="保存为 Skill" width="max-w-lg">

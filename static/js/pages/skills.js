@@ -27,6 +27,13 @@
       const testInput = ref('{}')
       const testResult = ref(null)
 
+      // Skill 健康度 + 手动优化（覆盖 GET /skills/{id}/health + POST /skills/{id}/optimize）
+      const showHealth = ref(false)
+      const healthSkill = ref(null)
+      const healthResult = ref(null)
+      const healthLoading = ref(false)
+      const optimizing = ref(false)
+
       // Sprint 8.3: 批量操作
       const selectedKeys = ref([])
       const bulkLoading = ref(false)
@@ -42,7 +49,7 @@
           { key: 'call_count', label: '调用次数', width: '100px' },
           { key: 'enabled', label: '状态', width: '100px' }
         ]
-        if (isAdmin.value) cols.push({ key: 'actions', label: '操作', width: '220px', align: 'center' })
+        if (isAdmin.value) cols.push({ key: 'actions', label: '操作', width: '260px', align: 'center' })
         return cols
       })
 
@@ -170,6 +177,44 @@
         } catch (e) { testResult.value = { success: false, error: { message: '执行失败' } } }
       }
 
+      // 健康度详情：GET /skills/{id}/health → {total_executions, failed_executions, failure_rate, health, circuit_broken}
+      const openHealth = async (row) => {
+        healthSkill.value = row
+        healthResult.value = null
+        showHealth.value = true
+        healthLoading.value = true
+        try {
+          healthResult.value = await window.API.get('/skills/' + row.id + '/health')
+        } catch (e) {
+          state.notify('加载健康度失败：' + (e.message || '未知错误'), 'error')
+        } finally { healthLoading.value = false }
+      }
+
+      const healthBadgeClass = (h) => ({
+        healthy: 'badge-success',
+        degraded: 'badge-warning',
+        critical: 'badge-danger'
+      }[h] || 'badge-muted')
+
+      const healthLabel = (h) => ({ healthy: '健康', degraded: '降级', critical: '严重' }[h] || '未知')
+
+      // 手动触发自进化优化：POST /skills/{id}/optimize（异步分析 + 生成优化建议）
+      const optimizeSkill = async (row) => {
+        const act = await state.confirmAction({
+          title: '触发 Skill 优化',
+          message: '确认对 "' + row.name + '" 触发自进化优化？系统将分析近期执行记录并生成优化建议（草稿需在 Review 页审批）。',
+          confirmText: '触发优化'
+        })
+        if (act !== 'confirm') return
+        optimizing.value = true
+        try {
+          await window.API.post('/skills/' + row.id + '/optimize')
+          state.notify('优化已触发，请稍后到自进化 Review 查看建议', 'success')
+        } catch (e) {
+          state.notify('优化失败：' + (e.message || '未知错误'), 'error')
+        } finally { optimizing.value = false }
+      }
+
       // Sprint 8.3: 批量操作（启用/禁用/删除）— 并行调用单条 API，汇总结果
       const bulkAction = async (action, label) => {
         if (selectedKeys.value.length === 0) return
@@ -229,8 +274,10 @@
       return {
         list, total, page, pageSize, keyword, sourceType, scope, loading, columns,
         showForm, editingId, form, isAdmin, showTest, testingSkill, testInput, testResult,
+        showHealth, healthSkill, healthResult, healthLoading, optimizing,
         loadList, openCreate, openEdit, submitForm, toggleEnable, removeRow, isCircuitBroken,
-        openTest, runTest, onPageChange, onSearch, onScopeChange, publishToTeam, state,
+        openTest, runTest, openHealth, optimizeSkill, healthBadgeClass, healthLabel,
+        onPageChange, onSearch, onScopeChange, publishToTeam, state,
         selectedKeys, bulkLoading, bulkEnable, bulkDisable, bulkDelete
       }
     },
@@ -291,6 +338,8 @@
             <template #actions="{ row }">
               <div class="flex gap-1 justify-center">
                 <button class="btn btn-ghost text-xs" @click="openTest(row)" title="测试">🧪</button>
+                <button class="btn btn-ghost text-xs" @click="openHealth(row)" title="健康度">🩺</button>
+                <button v-if="isAdmin" class="btn btn-ghost text-xs" @click="optimizeSkill(row)" :disabled="optimizing" title="触发自进化优化">🚀</button>
                 <button v-if="isAdmin && row.visibility==='private' && (!row.owner_id || row.owner_id===state.user.value?.id)" class="btn btn-ghost text-xs" @click="publishToTeam(row)" title="发布到团队">🌐</button>
                 <button v-if="isAdmin" class="btn btn-ghost text-xs" @click="openEdit(row)" title="编辑">✏️</button>
                 <button v-if="isAdmin" class="btn btn-ghost text-xs text-danger" @click="removeRow(row)" title="删除">🗑️</button>
@@ -351,6 +400,37 @@
           <template #footer>
             <button class="btn btn-secondary" @click="showForm = false">取消</button>
             <button class="btn btn-primary" @click="submitForm">{{ editingId ? '保存' : '创建' }}</button>
+          </template>
+        </base-modal>
+
+        <!-- 健康度详情：GET /skills/{id}/health -->
+        <base-modal v-model="showHealth" :title="'Skill 健康度：' + (healthSkill?.name || '')" width="max-w-lg">
+          <div v-if="healthLoading" class="text-center py-6 text-sm text-ink-muted">加载中...</div>
+          <div v-else-if="healthResult" class="space-y-3">
+            <div class="flex items-center gap-3">
+              <span :class="['badge', healthBadgeClass(healthResult.health)]">{{ healthLabel(healthResult.health) }}</span>
+              <span v-if="healthResult.circuit_broken" class="badge badge-danger">⛔ 已熔断</span>
+              <span v-else class="text-xs text-ink-subtle">未熔断</span>
+            </div>
+            <div class="grid grid-cols-3 gap-3 text-center">
+              <div class="card p-3">
+                <p class="text-xs text-ink-subtle">总执行次数</p>
+                <p class="text-lg font-semibold text-ink mt-1">{{ healthResult.total_executions || 0 }}</p>
+              </div>
+              <div class="card p-3">
+                <p class="text-xs text-ink-subtle">失败次数</p>
+                <p class="text-lg font-semibold text-danger mt-1">{{ healthResult.failed_executions || 0 }}</p>
+              </div>
+              <div class="card p-3">
+                <p class="text-xs text-ink-subtle">失败率</p>
+                <p class="text-lg font-semibold mt-1" :class="(healthResult.failure_rate || 0) >= 0.6 ? 'text-danger' : (healthResult.failure_rate || 0) >= 0.3 ? 'text-warning' : 'text-success'">{{ ((healthResult.failure_rate || 0) * 100).toFixed(1) }}%</p>
+              </div>
+            </div>
+            <p class="text-xs text-ink-subtle">健康等级说明：健康（失败率 &lt; 30%）| 降级（30%-60%）| 严重（&ge; 60%，触发自动熔断）</p>
+          </div>
+          <empty-state v-else icon="🩺" title="暂无健康度数据" description="该 Skill 尚未产生执行记录" />
+          <template #footer>
+            <button class="btn btn-secondary" @click="showHealth = false">关闭</button>
           </template>
         </base-modal>
 

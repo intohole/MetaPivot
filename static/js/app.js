@@ -97,6 +97,8 @@
     { path: '/audit', label: '审计日志', component: 'AuditPage', icon: '📋', roles: ['admin', 'manager'] },
     { path: '/users', label: '用户管理', component: 'UsersPage', icon: '👥', roles: ['admin'] },
     { path: '/channels', label: 'IM 渠道', component: 'ChannelsPage', icon: '💬' },
+    { path: '/schedules', label: '定时任务', component: 'SchedulesPage', icon: '⏰' },
+    { path: '/dlq', label: '死信队列', component: 'DlqPage', icon: '⚠️', roles: ['admin', 'manager'] },
     { path: '/configs', label: '系统配置', component: 'ConfigsPage', icon: '⚙️', roles: ['admin'] }
   ]
 
@@ -116,8 +118,8 @@
   /* === 侧边栏分组（Linear 风格：按职能分组，非平铺）=== */
   const NAV_GROUPS = [
     { label: '工作台', paths: ['/dashboard', '/agent', '/knowledge'] },
-    { label: '自动化', paths: ['/workflows', '/skills', '/templates', '/webhooks', '/channels'] },
-    { label: '治理', paths: ['/audit', '/users', '/configs'] }
+    { label: '自动化', paths: ['/workflows', '/skills', '/templates', '/webhooks', '/channels', '/schedules'] },
+    { label: '治理', paths: ['/audit', '/users', '/configs', '/dlq'] }
   ]
   const navGroups = computed(() => NAV_GROUPS.map(g => ({
     label: g.label,
@@ -287,12 +289,16 @@
     'LoginPage': P.Login, 'DashboardPage': P.Dashboard, 'AgentPage': P.Agent,
     'SkillsPage': P.Skills, 'SkillReviewPage': P.SkillReview, 'WorkflowsPage': P.Workflows, 'TemplatesPage': P.Templates, 'KnowledgePage': P.Knowledge,
     'AuditPage': P.Audit, 'UsersPage': P.Users, 'ChannelsPage': P.Channels,
-    'ConfigsPage': P.Configs, 'WebhooksPage': P.Webhooks
+    'ConfigsPage': P.Configs, 'WebhooksPage': P.Webhooks,
+    'SchedulesPage': P.Schedules, 'DlqPage': P.Dlq
   }
   for (const [name, def] of Object.entries(pageMap)) {
     app.component(name, def || { template: '<div class="p-6 text-ink-muted">页面加载失败：' + name + '</div>' })
   }
 
   app.mount('#app')
+  // 启动后异步校验 token 有效性（401 时 API 层自动 refresh，refresh 失败则 logout）
+  // 不阻塞首屏渲染：用户先看到界面，token 失效时再被引导回登录页
+  if (state.user.value) state.validateToken()
   console.log('MetaPivot 管理后台已启动')
 })()

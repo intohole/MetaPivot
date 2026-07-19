@@ -55,7 +55,7 @@
     if (resolve) resolve(action)
   }
 
-  // 从 localStorage 恢复登录态
+  // 从 localStorage 恢复登录态（乐观恢复，不阻塞 UI）
   function restoreAuth() {
     try {
       const token = localStorage.getItem('metapivot_token')
@@ -66,6 +66,22 @@
     } catch (e) {
       console.warn('Restore auth failed:', e)
       logout()
+    }
+  }
+
+  // 向后台校验 token 有效性（页面加载后由 app.js 调用，此时 window.API 已就绪）
+  // 401 时 API 层自动尝试 refresh；refresh 失败则 logout
+  async function validateToken() {
+    if (!user.value || !window.API) return
+    try {
+      const data = await window.API.get('/auth/me')
+      if (data) {
+        const u = { id: data.user_id, username: data.username, role: data.role }
+        localStorage.setItem('metapivot_user', JSON.stringify(u))
+        user.value = u
+      }
+    } catch (e) {
+      // API 层已处理 logout（refresh 失败时）
     }
   }
 
@@ -126,7 +142,7 @@
     user, loading, loadingCount, toasts, currentRoute,
     theme, toggleTheme,
     confirmState, confirmAction, resolveConfirm,
-    setAuth, logout, restoreAuth,
+    setAuth, logout, restoreAuth, validateToken,
     notify, dismissToast,
     navigate, hasRole,
     startLoading, stopLoading,
