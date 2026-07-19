@@ -1,6 +1,6 @@
 /* ============================================================
    WorkflowEditor — Drawflow DAG 可视化编辑器
-   - 10 节点类型分色（与后端 engine.py NODE_TYPES 对齐）
+   - 11 节点类型分色（与后端 engine.py NODE_TYPES 对齐）
    - 左侧节点面板（点击添加）
    - 中间画布（Drawflow，连线/删除）
    - 画布↔JSON 双向同步（loadJSON / exportJSON）
@@ -18,7 +18,8 @@
     hitl:         { label: '人工确认',   icon: '✋', color: '#fef9c3', inputs: 1, outputs: 1 },
     parallel:     { label: '并行执行',   icon: '⚡', color: '#fce7f3', inputs: 1, outputs: 1 },
     agent_call:   { label: 'Agent 调用', icon: '🎯', color: '#e0e7ff', inputs: 1, outputs: 1 },
-    sub_workflow: { label: '子工作流',   icon: '📦', color: '#f3f4f6', inputs: 1, outputs: 1 }
+    sub_workflow: { label: '子工作流',   icon: '📦', color: '#f3f4f6', inputs: 1, outputs: 1 },
+    http_request: { label: 'HTTP 请求',  icon: '🌐', color: '#d1fae5', inputs: 1, outputs: 1 }
   }
 
   let editor = null

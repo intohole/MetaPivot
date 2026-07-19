@@ -47,6 +47,9 @@ class ErrorCode:
     IM_CHANNEL_ERROR = "IM_CHANNEL_ERROR"
     IM_SIGNATURE_INVALID = "IM_SIGNATURE_INVALID"
 
+    # HTTP 类（Sprint 9.1: http_request 节点 + Skill source_type=http）
+    HTTP_REQUEST_FAILED = "HTTP_REQUEST_FAILED"
+
     # 通用
     RATE_LIMITED = "RATE_LIMITED"
     RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
@@ -69,6 +72,7 @@ ERROR_MESSAGES = {
     ErrorCode.WORKFLOW_NOT_FOUND: "工作流不存在",
     ErrorCode.IM_CHANNEL_ERROR: "IM渠道错误",
     ErrorCode.IM_SIGNATURE_INVALID: "IM签名校验失败",
+    ErrorCode.HTTP_REQUEST_FAILED: "HTTP请求失败",
     ErrorCode.RATE_LIMITED: "请求频率超限",
     ErrorCode.RESOURCE_NOT_FOUND: "资源不存在",
     ErrorCode.VALIDATION_ERROR: "参数校验失败",

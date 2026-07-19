@@ -8,6 +8,10 @@
 - sub_workflow: 递归调用 WorkflowService.execute_workflow 执行子工作流
 - condition 运算符扩展: == / != / > / < / >= / <= / contains / in
 
+新增节点类型（Sprint 9.1）：
+- http_request: 调用外部 HTTP API（exec_http_request 实现在 http_node.py）
+  含 SSRF 防护 + 重试 + 三种鉴权 + ${var} 变量替换
+
 架构说明：
   本模块位于 Domain 层，exec_skill_call / exec_send_message / exec_agent_call /
   exec_sub_workflow 通过函数内延迟导入 app.service.* 调用 Service 层。
@@ -17,6 +21,9 @@ import asyncio
 import operator
 from typing import Any
 
+from app.domain.workflow.http_node import exec_http_request
+from app.domain.workflow.variables import resolve_vars as _resolve_vars
+from app.domain.workflow.variables import resolve_vars_str as _resolve_vars_str
 from app.utils.logger import get_logger
 
 log = get_logger("workflow_node_executors")
@@ -227,24 +234,3 @@ def eval_condition_advanced(node: dict, config: dict, context: dict) -> list[str
         if case_value == value_str:
             return next_ids
     return config.get("default", [])
-
-
-def _resolve_vars(data: Any, context: dict) -> Any:
-    """递归解析 ${var} 占位符"""
-    if isinstance(data, str):
-        return _resolve_vars_str(data, context)
-    if isinstance(data, dict):
-        return {k: _resolve_vars(v, context) for k, v in data.items()}
-    if isinstance(data, list):
-        return [_resolve_vars(v, context) for v in data]
-    return data
-
-
-def _resolve_vars_str(text: str, context: dict) -> str:
-    """替换 ${var} 形式的变量引用"""
-    if not text or "${" not in text:
-        return text
-    variables = context.get("variables", {})
-    for k, v in variables.items():
-        text = text.replace(f"${{{k}}}", str(v))
-    return text

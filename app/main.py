@@ -107,6 +107,9 @@ async def lifespan(app: FastAPI):
     # Phase A 补丁：关闭向量库连接（Milvus/Chroma client 资源释放，避免 K8s 滚动更新连接泄漏）
     from app.infra.rag.factory import close_vector_store
     await close_vector_store()
+    # Sprint 9.1: 关闭 httpx 连接池（http_request 节点 + Skill source_type=http 共用）
+    from app.infra.tools.http_client import http_client
+    await http_client.close()
     await close_db()
     await close_redis()
     # Phase 4: 关闭 OTel SDK，flush 待上报 span
@@ -283,8 +286,7 @@ if _os.path.isdir(_static_dir):
 
 
 # 注：生产部署若通过 `uvicorn app.main:app` 启动（非 python -m app.main），
-# 请追加 CLI 参数 `--timeout-graceful-shutdown 25` 以匹配 K8s
-# terminationGracePeriodSeconds=30 的优雅关闭窗口。
+# 请追加 CLI 参数 `--timeout-graceful-shutdown 25` 以匹配 K8s terminationGracePeriodSeconds=30 的优雅关闭窗口。
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(

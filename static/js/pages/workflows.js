@@ -382,7 +382,7 @@
               </div>
               <!-- JSON 模式：textarea -->
               <textarea v-else v-model="form.definition" class="textarea font-mono text-xs" rows="14" aria-label="DAG JSON"></textarea>
-              <p class="mt-1 text-xs text-ink-subtle">节点类型：start/end/skill_call/llm_call/condition/send_message/hitl/parallel/agent_call/sub_workflow</p>
+              <p class="mt-1 text-xs text-ink-subtle">节点类型：start/end/skill_call/llm_call/condition/send_message/hitl/parallel/agent_call/sub_workflow/http_request</p>
             </div>
           </div>
           <template #footer>

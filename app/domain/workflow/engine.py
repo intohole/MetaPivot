@@ -11,6 +11,7 @@
 - parallel: 并行执行多分支（asyncio.gather，Phase B5）
 - agent_call: 调用 AgentService 启动子 Agent 任务（Phase B5）
 - sub_workflow: 递归调用 WorkflowService 执行子工作流（Phase B5）
+- http_request: 调用外部 HTTP API（Sprint 9.1，含 SSRF 防护 + 重试 + 鉴权）
 
 执行模型：
 - 节点按 next 列表推进
@@ -26,6 +27,7 @@ from app.domain.workflow.node_executors import (
     eval_condition_advanced,
     exec_agent_call,
     exec_hitl,
+    exec_http_request,
     exec_llm_call,
     exec_parallel,
     exec_send_message,
@@ -41,6 +43,7 @@ log = get_logger("workflow_engine")
 NODE_TYPES = {
     "start", "end", "skill_call", "llm_call", "condition",
     "send_message", "hitl", "parallel", "agent_call", "sub_workflow",
+    "http_request",
 }
 
 
@@ -135,6 +138,12 @@ async def execute_node(
 
     if node_type == "sub_workflow":
         output = await exec_sub_workflow(config, context, chat_id, user_id)
+        return output, _next_nodes(node, context)
+
+    # Sprint 9.1: http_request 节点 — 调用外部 HTTP API
+    if node_type == "http_request":
+        node_id = node.get("id", "")
+        output = await exec_http_request(config, context, node_id=node_id)
         return output, _next_nodes(node, context)
 
     log.warning("Unknown node type, skip: {}", node_type)
