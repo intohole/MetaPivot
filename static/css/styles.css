@@ -32,15 +32,22 @@
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
 
-  /* === 2. Semantic Layer：组件引用此层 === */
+  /* === 2. Semantic Layer：组件引用此层（Linear 风格：单一品牌色 + Surface 阶梯 + hairline 边框）=== */
   color-scheme: light dark;
 
-  --color-brand: var(--color-blue-600);
-  --color-brand-dark: var(--color-blue-700);
-  --color-brand-light: var(--color-blue-50);
-  --color-surface: #ffffff;
-  --color-surface-muted: var(--color-gray-50);
-  --color-surface-elevated: #ffffff;
+  /* 品牌色：Linear lavender-blue #5e6ad2（提升辨识度，告别 Tailwind 默认蓝）*/
+  --color-brand: #5e6ad2;
+  --color-brand-dark: #4f46e5;       /* hover 加深（indigo-600）*/
+  --color-brand-light: #eef2ff;      /* active 背景 */
+  --color-brand-hover: #7170ff;      /* 暗色 hover（亮色备用）*/
+
+  /* Surface 4 档阶梯（Linear canvas→surface-1→2→3 模式，用 hairline 边框替代阴影分层）*/
+  --color-surface-canvas: var(--color-gray-50);   /* 画布背景（最底层）*/
+  --color-surface: #ffffff;                        /* 卡片背景（surface-1）*/
+  --color-surface-muted: var(--color-gray-50);     /* 次级层（surface-2）*/
+  --color-surface-elevated: #ffffff;               /* 提升层（surface-3，hover/dropdown）*/
+  --color-surface-overlay: var(--color-gray-100);  /* 悬浮层（surface-4，modal/dropdown）*/
+
   --color-text: var(--color-gray-900);
   --color-text-muted: var(--color-gray-600);
   --color-text-subtle: var(--color-gray-500);  /* AA 4.6:1，修复原 gray-400 的 2.85:1 */
@@ -52,8 +59,8 @@
   --color-warning-bg: var(--color-amber-50);
   --color-danger: var(--color-red-500);
   --color-danger-bg: var(--color-red-50);
-  --color-info: var(--color-blue-600);
-  --color-info-bg: var(--color-blue-50);
+  --color-info: #5e6ad2;             /* info 统一用品牌色，减少色彩噪音 */
+  --color-info-bg: var(--color-indigo-50);
 
   /* Motion tokens（替代硬编码 0.15s）*/
   --motion-fast: 150ms;
@@ -90,9 +97,14 @@
 html { -webkit-text-size-adjust: 100%; }
 body {
   font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  font-feature-settings: 'cv11', 'ss01';
+  font-feature-settings: 'cv01', 'ss03', 'cv11', 'ss01';  /* Linear 同款 OpenType 特性 */
   line-height: 1.6;
+  font-weight: 450;  /* 接近 Linear signature 510，兼顾中文可读性 */
 }
+/* 大字号负字距（Linear 风格：display 字号用激进负字距提升精致感）*/
+h1, h2, h3, .text-display, .text-xl, .text-2xl { letter-spacing: -0.02em; }
+h1 { font-weight: 600; }
+h2, h3 { font-weight: 510; }  /* Linear signature weight */
 :focus-visible {
   outline: 2px solid var(--color-brand);
   outline-offset: 2px;
@@ -257,29 +269,32 @@ a:hover { text-decoration: underline; }
 .markdown-body a { color: var(--color-brand); text-decoration: underline; }
 
 /* ============================================================
-   暗色模式（[data-theme="dark"] 覆盖语义层变量）
-   - 通过 document.documentElement.dataset.theme 切换
-   - localStorage 持久化，避免 FOUC（store.js 启动时同步）
-   - Surface elevation：越高的 z 层越亮（Material Design 规范）
-   - 补齐 purple/green/indigo/yellow 全语义变量覆盖
+   暗色模式（Linear 近黑画布 + hairline 半透明边框）
+   - surface 近黑 #0f1011（非纯黑，带微蓝调，避免刺眼）
+   - 边框用 rgba(255,255,255,0.08) hairline（Linear 标志性）
+   - 品牌色暗色用更亮的 #7170ff，确保暗背景上 CTA 醒目
    ============================================================ */
 [data-theme="dark"] {
   color-scheme: dark;
-  --color-brand: #3b82f6;
-  --color-brand-dark: #2563eb;
-  --color-brand-light: #1e3a5f;
-  --color-surface: #1f2937;
-  --color-surface-muted: #111827;
-  --color-surface-elevated: #374151;
-  --color-text: #f9fafb;
-  --color-text-muted: #9ca3af;
-  --color-text-subtle: #9ca3af;  /* 暗色背景上 gray-400 对比度达标 */
-  --color-border: #374151;
-  --color-border-strong: #4b5563;
+  --color-brand: #7170ff;           /* 暗色用更亮的紫，CTA 醒目 */
+  --color-brand-dark: #5e6ad2;
+  --color-brand-light: #1e1b4b;
+  --color-brand-hover: #828fff;
+  /* Surface 4 档阶梯（Linear canvas→surface-1→2→3 近黑梯度）*/
+  --color-surface-canvas: #08090a;            /* 画布级（最深，近黑带微蓝调）*/
+  --color-surface: #0f1011;                   /* 卡片（surface-1）*/
+  --color-surface-muted: #141516;             /* 次级层（surface-2）*/
+  --color-surface-elevated: #191a1b;          /* 提升层（surface-3，hover/dropdown）*/
+  --color-surface-overlay: #1f2024;           /* 悬浮层（surface-4，modal）*/
+  --color-text: #f7f8f8;                      /* 微暖白（非纯白，防眼疲劳）*/
+  --color-text-muted: #d0d6e0;                /* 银灰（原 #9ca3af 对比度不足）*/
+  --color-text-subtle: #8a8f98;               /* Linear ink-subtle */
+  --color-border: rgba(255,255,255,0.08);     /* hairline 半透明（Linear 标志性）*/
+  --color-border-strong: rgba(255,255,255,0.14);
   --color-success-bg: #064e3b;
   --color-warning-bg: #78350f;
   --color-danger-bg: #7f1d1d;
-  --color-info-bg: #1e3a5f;
+  --color-info-bg: #1e1b4b;
   /* 补齐原色板缺口：purple/green/indigo/yellow/amber/red 暗色变体 */
   --color-purple-50: #2e1065; --color-purple-700: #c4b5fd;
   --color-green-50: #064e3b; --color-green-700: #6ee7b7;

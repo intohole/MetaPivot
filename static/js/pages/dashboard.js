@@ -14,10 +14,10 @@
       const loading = ref(true)
 
       const statCards = computed(() => [
-        { key: 'tasks', label: 'Agent 任务', value: stats.value.tasks, icon: '🤖', color: 'bg-blue-50 text-blue-700' },
-        { key: 'skills', label: '可用 Skill', value: stats.value.skills, icon: '🧩', color: 'bg-purple-50 text-purple-700' },
-        { key: 'workflows', label: '工作流', value: stats.value.workflows, icon: '⚡', color: 'bg-amber-50 text-amber-700' },
-        { key: 'todayCalls', label: '今日调用', value: stats.value.todayCalls, icon: '📈', color: 'bg-green-50 text-green-700' }
+        { key: 'tasks', label: 'Agent 任务', value: stats.value.tasks, icon: '🤖' },
+        { key: 'skills', label: '可用 Skill', value: stats.value.skills, icon: '🧩' },
+        { key: 'workflows', label: '工作流', value: stats.value.workflows, icon: '⚡' },
+        { key: 'todayCalls', label: '今日调用', value: stats.value.todayCalls, icon: '📈' }
       ])
 
       const loadDashboard = async () => {
@@ -104,15 +104,15 @@
     },
     template: `
       <div class="space-y-6">
-        <!-- 统计卡片 -->
+        <!-- 统计卡片（Linear 风格：大数字 + uppercase label + 品牌色图标）-->
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div v-for="c in statCards" :key="c.key" class="card p-5">
+          <div v-for="c in statCards" :key="c.key" class="card p-5 hover:border-strong transition-colors">
             <div class="flex items-center justify-between">
               <div>
-                <p class="text-sm text-ink-muted">{{ c.label }}</p>
-                <p class="mt-1 text-2xl font-bold text-ink">{{ c.value }}</p>
+                <p class="text-xs font-medium text-ink-subtle uppercase tracking-wider">{{ c.label }}</p>
+                <p class="mt-2 text-3xl font-semibold text-ink" style="letter-spacing: -0.02em;">{{ c.value }}</p>
               </div>
-              <div :class="['w-12 h-12 rounded-lg flex items-center justify-center text-2xl', c.color]" aria-hidden="true">{{ c.icon }}</div>
+              <div class="w-10 h-10 rounded-lg bg-brand-light flex items-center justify-center text-xl" aria-hidden="true">{{ c.icon }}</div>
             </div>
           </div>
         </div>
@@ -121,9 +121,9 @@
         <base-card v-if="showOnboarding" title="🚀 快速开始指南" subtitle="按步骤完成初始化，4 步上手 MetaPivot">
           <div class="space-y-3">
             <div v-for="s in onboardingSteps" :key="s.step"
-                 class="flex items-start gap-3 p-3 rounded-lg hover:bg-blue-50 transition-colors cursor-pointer"
+                 class="flex items-start gap-3 p-3 rounded-lg hover:bg-brand-light transition-colors cursor-pointer"
                  @click="state.navigate(s.path)">
-              <div class="flex-shrink-0 w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold"
+              <div class="flex-shrink-0 w-8 h-8 rounded-full bg-brand text-white flex items-center justify-center text-sm font-bold"
                    aria-hidden="true">{{ s.step }}</div>
               <div class="flex-1">
                 <p class="text-sm font-medium text-ink">{{ s.title }}</p>

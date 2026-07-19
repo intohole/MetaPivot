@@ -113,6 +113,26 @@
     })
   })
 
+  /* === 侧边栏分组（Linear 风格：按职能分组，非平铺）=== */
+  const NAV_GROUPS = [
+    { label: '工作台', paths: ['/dashboard', '/agent', '/knowledge'] },
+    { label: '自动化', paths: ['/workflows', '/skills', '/templates', '/webhooks', '/channels'] },
+    { label: '治理', paths: ['/audit', '/users', '/configs'] }
+  ]
+  const navGroups = computed(() => NAV_GROUPS.map(g => ({
+    label: g.label,
+    items: visibleNav.value.filter(r => g.paths.includes(r.path))
+  })).filter(g => g.items.length > 0))
+
+  /* === 面包屑（当前路由 + 父级）=== */
+  const breadcrumbs = computed(() => {
+    const r = currentRoute.value
+    const group = NAV_GROUPS.find(g => g.paths.includes(r.path))
+    return group
+      ? [{ label: group.label }, { label: r.label }]
+      : [{ label: r.label }]
+  })
+
   /* === 路由守卫 === */
   function guardRoute() {
     const path = state.currentRoute.value
@@ -155,7 +175,7 @@
       }
       onMounted(() => document.addEventListener('keydown', onGlobalKeydown))
       onUnmounted(() => document.removeEventListener('keydown', onGlobalKeydown))
-      return { state, currentRoute, visibleNav, sidebarOpen, toggleSidebar, handleLogout, paletteRef }
+      return { state, currentRoute, visibleNav, navGroups, breadcrumbs, sidebarOpen, toggleSidebar, handleLogout, paletteRef }
     },
     template: `
       <div>
@@ -171,15 +191,20 @@
               <span class="text-2xl" aria-hidden="true">🤖</span>
               <span class="font-bold text-ink">MetaPivot</span>
             </div>
-            <nav class="flex-1 py-4 px-2 space-y-1" role="navigation">
-              <button v-for="r in visibleNav" :key="r.path"
-                      @click="state.navigate(r.path)"
-                      :class="['w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
-                               currentRoute.path === r.path ? 'bg-brand-light text-brand' : 'text-ink-muted hover:bg-surface-muted hover:text-ink']"
-                      :aria-current="currentRoute.path === r.path ? 'page' : undefined">
-                <span aria-hidden="true" class="text-base">{{ r.icon }}</span>
-                <span>{{ r.label }}</span>
-              </button>
+            <nav class="flex-1 py-4 px-2 space-y-5" role="navigation" data-tour="sidebar-nav">
+              <div v-for="g in navGroups" :key="g.label">
+                <p class="px-3 mb-1 text-[11px] font-semibold text-ink-subtle uppercase tracking-wider" aria-hidden="true">{{ g.label }}</p>
+                <div class="space-y-0.5">
+                  <button v-for="r in g.items" :key="r.path"
+                          @click="state.navigate(r.path)"
+                          :class="['w-full flex items-center gap-3 px-3 py-1.5 rounded-md text-sm font-medium transition-colors',
+                                   currentRoute.path === r.path ? 'bg-brand-light text-brand' : 'text-ink-muted hover:bg-surface-muted hover:text-ink']"
+                          :aria-current="currentRoute.path === r.path ? 'page' : undefined">
+                    <span aria-hidden="true" class="text-base">{{ r.icon }}</span>
+                    <span>{{ r.label }}</span>
+                  </button>
+                </div>
+              </div>
             </nav>
             <div class="px-2 py-3 border-t border-border">
               <div class="px-3 py-2 text-xs text-ink-subtle" v-if="state.user.value">
@@ -194,24 +219,27 @@
 
           <div class="flex-1 flex flex-col min-w-0">
             <header class="bg-surface border-b border-border h-16 flex items-center justify-between px-6 sticky top-0 z-30" data-tour="header">
-              <div class="flex items-center gap-3">
+              <div class="flex items-center gap-3 min-w-0">
                 <button @click="toggleSidebar" class="btn btn-ghost p-2" :aria-label="sidebarOpen ? '收起侧边栏' : '展开侧边栏'" :aria-expanded="sidebarOpen">
                   <span aria-hidden="true">☰</span>
                 </button>
-                <h1 class="text-base font-semibold text-ink">{{ currentRoute.label }}</h1>
+                <breadcrumb :items="breadcrumbs" />
               </div>
               <div class="flex items-center gap-2 text-sm text-ink-muted">
-                <button class="btn btn-ghost p-2" @click="state.toggleTheme" :aria-label="state.theme.value === 'light' ? '切换暗色模式' : '切换亮色模式'" title="切换主题">
-                  <span aria-hidden="true">{{ state.theme.value === 'light' ? '🌙' : '☀️' }}</span>
-                </button>
+                <span class="hidden md:inline-flex items-center gap-1.5 text-xs text-ink-subtle" title="系统运行状态">
+                  <span class="w-1.5 h-1.5 rounded-full bg-success" aria-hidden="true"></span>
+                  <span>系统正常</span>
+                </span>
                 <button class="btn btn-ghost p-2 hidden sm:inline-flex" @click="paletteRef && paletteRef.open()" aria-label="打开命令面板" title="命令面板（⌘K / Ctrl+K）" data-tour="palette-hint">
                   <span aria-hidden="true">⌘K</span>
                 </button>
-                <span class="badge badge-success"><span class="w-1.5 h-1.5 rounded-full bg-current" aria-hidden="true"></span>系统正常</span>
+                <button class="btn btn-ghost p-2" @click="state.toggleTheme" :aria-label="state.theme.value === 'light' ? '切换暗色模式' : '切换亮色模式'" title="切换主题">
+                  <span aria-hidden="true">{{ state.theme.value === 'light' ? '🌙' : '☀️' }}</span>
+                </button>
               </div>
             </header>
 
-            <main class="flex-1 p-6 bg-surface-muted overflow-y-auto" role="main">
+            <main class="flex-1 p-6 bg-surface-canvas overflow-y-auto" role="main">
               <component :is="currentRoute.component" />
             </main>
           </div>

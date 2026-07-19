@@ -406,7 +406,7 @@
                               m.role === 'user' ? 'bg-brand text-white' : 'bg-surface border border-border text-ink']">
                   <div v-if="m.role === 'user'" class="whitespace-pre-wrap">{{ m.content }}</div>
                   <div v-else class="markdown-body" v-html="renderMarkdown(m.content)"></div>
-                  <p :class="['text-xs mt-1', m.role === 'user' ? 'text-blue-100' : 'text-ink-subtle']">{{ m.time }}</p>
+                  <p :class="['text-xs mt-1', m.role === 'user' ? 'text-white/70' : 'text-ink-subtle']">{{ m.time }}</p>
                 </div>
               </div>
               <div v-if="streaming" class="flex justify-start">
@@ -494,13 +494,13 @@
       <base-modal v-model="showSaveSkill" title="保存为 Skill" width="max-w-lg">
         <div class="space-y-4">
           <!-- LLM 抽取元数据（只读展示） -->
-          <div v-if="saveSkillDraft" class="card p-3 bg-blue-50 border-blue-200 space-y-1">
+          <div v-if="saveSkillDraft" class="card p-3 bg-brand-light border border-brand/20 space-y-1">
             <div class="flex items-center justify-between">
-              <span class="text-sm font-medium text-blue-900">🤖 LLM 分析结果</span>
+              <span class="text-sm font-medium text-ink">🤖 LLM 分析结果</span>
               <span class="badge badge-info text-xs">置信度 {{ saveSkillDraft.confidence != null ? (saveSkillDraft.confidence * 100).toFixed(0) + '%' : 'N/A' }}</span>
             </div>
-            <p v-if="saveSkillDraft.reasoning" class="text-xs text-blue-700">{{ saveSkillDraft.reasoning }}</p>
-            <p class="text-xs text-blue-700">检测到 {{ saveSkillDraft.step_count || 0 }} 个可复用步骤</p>
+            <p v-if="saveSkillDraft.reasoning" class="text-xs text-ink-muted">{{ saveSkillDraft.reasoning }}</p>
+            <p class="text-xs text-ink-muted">检测到 {{ saveSkillDraft.step_count || 0 }} 个可复用步骤</p>
           </div>
           <!-- 可编辑字段 -->
           <div>
