@@ -38,7 +38,7 @@ mcp==1.27.1
 fastmcp==3.0.0
 
 # IM SDK
-dingtalk-stream==0.25.0
+dingtalk-stream==0.24.3
 lark-oapi==1.4.12
 pycryptodome==3.21.0
 cryptography==44.0.0
