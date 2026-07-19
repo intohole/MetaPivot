@@ -9,7 +9,7 @@
 """
 from sqlalchemy import select
 
-from app.infra.db.models_core import AgentTaskEventORM, AgentTaskORM
+from app.infra.db.models_agent import AgentTaskEventORM, AgentTaskORM
 from app.infra.db.session import get_db_session
 from app.utils.config import settings
 from app.utils.logger import get_logger

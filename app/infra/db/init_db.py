@@ -10,9 +10,12 @@ from app.infra.db.models_user_skill import (
 )
 from app.infra.db.models_core import (
     WorkflowORM, WorkflowExecutionORM, WorkflowTemplateORM,
-    AgentTaskORM, AgentTaskStepORM, AgentTaskEventORM,
     AuditLogORM, KnowledgeDocumentORM, IMChatORM, IMMessageORM, ConfigORM,
-    ChatMessageORM, ChatSummaryORM, ScheduledTaskORM,
+    ScheduledTaskORM,
+)
+from app.infra.db.models_agent import (  # noqa: F401  Sprint 8.1: Agent/Chat 模型独立文件，确保.metadata 注册建表
+    AgentTaskORM, AgentTaskStepORM, AgentTaskEventORM,
+    ChatMessageORM, ChatSummaryORM,
 )
 from app.infra.db.models_webhook import WebhookORM  # noqa: F401  Phase 2: 确保.metadata 注册
 from app.utils.config import settings

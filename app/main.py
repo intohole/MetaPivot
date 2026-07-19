@@ -241,7 +241,7 @@ async def metrics():
 
 
 # 注册路由
-from app.route import im_routes, agent_routes, skill_routes, workflow_routes  # noqa: E402
+from app.route import im_routes, agent_routes, skill_routes, skill_review_routes, workflow_routes  # noqa: E402
 from app.route import audit_routes, admin_routes, auth_routes, knowledge_routes  # noqa: E402
 from app.route import schedule_routes, replay_routes, dlq_routes  # noqa: E402
 from app.route import webhook_routes  # noqa: E402
@@ -252,6 +252,8 @@ app.include_router(agent_routes.router, prefix="/api/v1/agent", tags=["Agent"])
 # Phase 4: 会话重放（GET /tasks/{id}/replay 返回事件流 + Langfuse URL）
 app.include_router(replay_routes.router, prefix="/api/v1/agent", tags=["Agent"])
 app.include_router(skill_routes.router, prefix="/api/v1/skills", tags=["Skill管理"])
+# Sprint 8.2: Skill 自进化 Review 路由（草稿/修订审批，同前缀合并）
+app.include_router(skill_review_routes.router, prefix="/api/v1/skills", tags=["Skill管理"])
 app.include_router(workflow_routes.router, prefix="/api/v1/workflows", tags=["工作流"])
 app.include_router(webhook_routes.router, prefix="/api/v1/webhooks", tags=["Webhook触发"])
 app.include_router(knowledge_routes.router, prefix="/api/v1/knowledge", tags=["知识库"])

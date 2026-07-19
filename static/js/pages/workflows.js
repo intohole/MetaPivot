@@ -31,6 +31,10 @@
       const saveSkillForm = reactive({ name: '', description: '', tags: [] })
       const savingSkill = ref(false)
 
+      // Sprint 8.3: 批量操作
+      const selectedKeys = ref([])
+      const bulkLoading = ref(false)
+
       const isAdmin = computed(() => state.hasRole('admin'))
 
       const columns = computed(() => {
@@ -127,11 +131,14 @@
       }
 
       const toggleEnabled = async (row) => {
+        // Sprint 8.4: 乐观更新 — 立即切换 UI，失败回滚
+        const oldEnabled = row.enabled
+        row.enabled = !row.enabled
         try {
-          await window.API.put('/workflows/' + row.id, { enabled: !row.enabled })
-          state.notify(row.enabled ? '已禁用' : '已启用', 'success')
-          loadList()
+          await window.API.put('/workflows/' + row.id, { enabled: !oldEnabled })
+          state.notify(oldEnabled ? '已禁用' : '已启用', 'success')
         } catch (e) {
+          row.enabled = oldEnabled  // 回滚
           state.notify('操作失败：' + (e.message || '未知错误'), 'error')
         }
       }
@@ -192,7 +199,44 @@
         } finally { savingSkill.value = false }
       }
 
-      const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }
+      // Sprint 8.3: 批量操作（启用/禁用/删除）— 并行调用单条 API
+      const bulkAction = async (action, label) => {
+        if (selectedKeys.value.length === 0) return
+        const act = await state.confirmAction({
+          title: '批量' + label,
+          message: `确认对 ${selectedKeys.value.length} 个工作流执行"${label}"操作？`,
+          confirmText: label, danger: action === 'delete',
+        })
+        if (act !== 'confirm') return
+        bulkLoading.value = true
+        try {
+          const results = await Promise.allSettled(
+            selectedKeys.value.map(id => {
+              if (action === 'enable') return window.API.put(`/workflows/${id}`, { enabled: true })
+              if (action === 'disable') return window.API.put(`/workflows/${id}`, { enabled: false })
+              if (action === 'delete') return window.API.del(`/workflows/${id}`)
+            })
+          )
+          const ok = results.filter(r => r.status === 'fulfilled').length
+          const fail = results.length - ok
+          state.notify(`批量${label}完成：成功 ${ok} 个${fail > 0 ? '，失败 ' + fail + ' 个' : ''}`, fail > 0 ? 'warning' : 'success')
+          selectedKeys.value = []
+          loadList()
+        } catch (e) {
+          state.notify(`批量${label}失败：` + (e.message || '未知错误'), 'error')
+        } finally {
+          bulkLoading.value = false
+        }
+      }
+      const bulkEnable = () => bulkAction('enable', '启用')
+      const bulkDisable = () => bulkAction('disable', '禁用')
+      const bulkDelete = () => bulkAction('delete', '删除')
+
+      const onPageChange = ({ page: p, pageSize: ps }) => {
+        page.value = p; if (ps) pageSize.value = ps
+        selectedKeys.value = [] // 翻页清空选择
+        loadList()
+      }
       const onSearch = () => { page.value = 1; loadList() }
       const goTemplates = () => state.navigate('/templates')
 
@@ -212,6 +256,7 @@
         loadList, openCreate, openEdit, submitForm, removeRow, toggleEnabled,
         openRun, executeRun, checkRunStatus, openSaveSkill, confirmSaveSkill,
         onPageChange, onSearch, goTemplates, state,
+        selectedKeys, bulkLoading, bulkEnable, bulkDisable, bulkDelete
       }
     },
     template: `
@@ -228,7 +273,18 @@
         </base-card>
 
         <base-card>
-          <base-table :columns="columns" :rows="list" :loading="loading">
+          <!-- Sprint 8.3: 批量操作栏 -->
+          <div v-if="selectedKeys.length > 0" class="flex items-center gap-3 px-4 py-2 bg-brand-light/50 border-b border-brand/20 rounded-t-lg">
+            <span class="text-sm text-ink">已选 {{ selectedKeys.length }} 项</span>
+            <button class="btn btn-ghost text-xs" @click="selectedKeys = []">取消选择</button>
+            <div class="flex-1"></div>
+            <button class="btn btn-secondary text-xs" @click="bulkEnable" :disabled="bulkLoading">✓ 批量启用</button>
+            <button class="btn btn-secondary text-xs" @click="bulkDisable" :disabled="bulkLoading">✕ 批量禁用</button>
+            <button v-if="isAdmin" class="btn btn-ghost text-xs text-danger" @click="bulkDelete" :disabled="bulkLoading">🗑️ 批量删除</button>
+          </div>
+          <base-table :columns="columns" :rows="list" :loading="loading"
+                      :empty="keyword ? '未找到匹配的工作流' : '暂无工作流，点击「+ 新建工作流」或「🗂️ 从模板创建」开始'"
+                      selectable row-key="id" v-model:selected="selectedKeys">
             <template #name="{ row }">
               <p class="font-medium text-ink">{{ row.name }}</p>
               <p class="text-xs text-ink-muted">{{ row.description || '无描述' }}</p>

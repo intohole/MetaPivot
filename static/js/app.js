@@ -130,6 +130,12 @@
     name: 'App',
     setup() {
       watch(state.currentRoute, guardRoute, { immediate: true })
+      // Sprint 8.2: 登录后加载 Skill 快捷命令到命令面板（⌘K → /skill-name args）
+      watch(state.user, (u) => {
+        if (u && window.SkillCommands) {
+          setTimeout(() => window.SkillCommands.init(), 100)
+        }
+      }, { immediate: true })
       const sidebarOpen = ref(true)
       const toggleSidebar = () => { sidebarOpen.value = !sidebarOpen.value }
       // Round 4: handleLogout 改用全局 confirmAction 替代原生 confirm()

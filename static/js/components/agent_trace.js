@@ -16,7 +16,7 @@
   // 步骤类型 → 图标映射
   const ICON_MAP = {
     step_intent: '🔍', step_planning: '📋', step_execute: '⚙️',
-    tool: '🔧', blocked: '⚠️', trimmed: '✂️', reflected: '💭', llm: '🤖', step: '•'
+    tool: '🔧', blocked: '⚠️', trimmed: '✂️', summarized: '📝', reflected: '💭', llm: '🤖', retry: '🔄', step: '•'
   }
 
   // 安全 JSON 格式化（截断超长输出）
@@ -44,6 +44,8 @@
         if (s.type === 'llm') return 'LLM 推理'
         if (s.type === 'reflected') return '反思校正'
         if (s.type === 'trimmed') return '上下文裁剪'
+        if (s.type === 'summarized') return '上下文摘要压缩'
+        if (s.type === 'retry') return '工具重试：' + (s.tool || '?')
         if (s.type === 'step' || s.type?.startsWith('step_')) {
           const name = s.step || s.type.replace('step_', '')
           return ({ intent: '意图识别', planning: '任务规划', execute: '执行步骤' })[name] || ('步骤：' + name)
@@ -118,6 +120,12 @@
               </div>
               <div v-else-if="s.type === 'trimmed'" class="trace-body">
                 <p class="text-sm text-ink-muted">消息从 {{ s.before }} 条裁剪到 {{ s.after }} 条（保护上下文窗口）</p>
+              </div>
+              <div v-else-if="s.type === 'summarized'" class="trace-body">
+                <p class="text-sm text-ink-muted">📝 {{ s.count || '?' }} 条历史消息已压缩为摘要（{{ s.length || 0 }} 字符），节省 token 开销</p>
+              </div>
+              <div v-else-if="s.type === 'retry'" class="trace-body">
+                <p class="text-sm text-warning">🔄 瞬时失败，第 {{ s.attempt || 1 }}/{{ s.max_attempts || 3 }} 次重试中</p>
               </div>
               <div v-else-if="s.result" class="trace-body">
                 <pre class="trace-code">{{ fmtJson(s.result) }}</pre>

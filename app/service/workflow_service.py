@@ -5,17 +5,17 @@
 2. 触发执行（创建 WorkflowExecution + 异步推进 DAG）
 3. 查询执行状态
 4. HITL 暂停/恢复
+
+Sprint 8.1: DAG 推进逻辑已抽离到 workflow_runner.py（保持本文件 ≤ 300 行）。
 """
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import func, select
 
-from app.domain.workflow.engine import WorkflowDefinition, execute_node
+from app.domain.workflow.engine import WorkflowDefinition
 from app.infra.db.models_core import WorkflowExecutionORM, WorkflowORM
 from app.infra.db.session import get_db_session
 from app.utils.logger import get_logger
-from app.utils.metrics import record_workflow_execution
 from app.utils.response import AppError, ErrorCode
 
 log = get_logger("workflow_service")
@@ -142,9 +142,11 @@ class WorkflowService:
             await session.flush()
             execution_id = execution.id
 
+        # Sprint 8.1: 委托到 workflow_runner.run_execution（保持本文件 ≤ 300 行）
+        from app.service.workflow_runner import run_execution
         import asyncio
-        bg = asyncio.create_task(self._run_execution(
-            execution_id, wf.definition, inputs, chat_id, user_id,
+        bg = asyncio.create_task(run_execution(
+            self, execution_id, wf.definition, inputs, chat_id, user_id,
             workflow_id=workflow_id, exec_stack=exec_stack,
         ))
         self._running_tasks[execution_id] = bg
@@ -174,139 +176,23 @@ class WorkflowService:
             if ex.status != "paused":
                 raise AppError(ErrorCode.WORKFLOW_INVALID, "执行未暂停", 400)
 
+        # Sprint 8.1: 委托到 workflow_runner.update_execution
+        from app.service.workflow_runner import run_execution, update_execution
         if decision == "reject":
-            await self._update_execution(execution_id, status="cancelled", error={"reason": "user_rejected"})
+            await update_execution(execution_id, status="cancelled", error={"reason": "user_rejected"})
             return {"execution_id": execution_id, "status": "cancelled"}
 
         # 恢复：重新加载工作流定义并从当前节点继续
         wf = await self.get_workflow(ex.workflow_id)
         import asyncio
-        bg = asyncio.create_task(self._run_execution(
-            execution_id, wf.definition, ex.inputs, ex.chat_id or "", ex.triggered_by or "",
+        bg = asyncio.create_task(run_execution(
+            self, execution_id, wf.definition, ex.inputs, ex.chat_id or "", ex.triggered_by or "",
             resume_from=ex.current_node, context_mod=modifications,
             workflow_id=ex.workflow_id,
         ))
         self._running_tasks[execution_id] = bg
         bg.add_done_callback(lambda t: self._running_tasks.pop(execution_id, None))
         return {"execution_id": execution_id, "status": "running"}
-
-    # ============ 内部：DAG 推进 ============
-
-    async def _run_execution(
-        self,
-        execution_id: str,
-        definition: dict,
-        inputs: dict,
-        chat_id: str,
-        user_id: str,
-        resume_from: Optional[str] = None,
-        context_mod: Optional[dict] = None,
-        workflow_id: str = "",
-        exec_stack: Optional[list] = None,
-    ) -> None:
-        """异步推进工作流执行"""
-        final_status = "failed"
-        outputs: dict = {}
-        try:
-            wf_def = WorkflowDefinition(definition)
-            context = {
-                "inputs": inputs,
-                "variables": dict(inputs),
-                "outputs": {},
-                "__adj": wf_def.adj,
-                "__current_workflow_id": workflow_id,
-                "__exec_stack": exec_stack if exec_stack is not None else [],
-            }
-            if context_mod:
-                context["variables"].update(context_mod)
-
-            current = resume_from or wf_def.start_node
-            while current:
-                await self._update_execution(execution_id, current_node=current, status="running")
-                node = wf_def.nodes[current]
-                output, next_ids = await execute_node(node, context, chat_id, user_id)
-
-                if output.get("paused"):
-                    await self._update_execution(execution_id, status="paused")
-                    log.info("Workflow {} paused at {} for HITL", execution_id, current)
-                    final_status = "paused"
-                    return
-
-                if output.get("finished"):
-                    outputs = context.get("outputs", {})
-                    await self._update_execution(execution_id, status="completed", outputs=outputs)
-                    log.info("Workflow {} completed", execution_id)
-                    final_status = "completed"
-                    return
-
-                # 推进到下一节点
-                if not next_ids:
-                    outputs = context.get("outputs", {})
-                    await self._update_execution(execution_id, status="completed", outputs=outputs)
-                    final_status = "completed"
-                    return
-                current = next_ids[0]  # 简化：取第一个分支
-
-        except AppError as e:
-            log.exception("Workflow {} failed: {}", execution_id, e.message)
-            await self._update_execution(execution_id, status="failed", error={"code": e.code, "message": e.message})
-        except Exception as e:
-            log.exception("Workflow {} crashed: {}", execution_id, e)
-            await self._update_execution(execution_id, status="failed", error={"message": str(e)})
-        finally:
-            # 审计工作流执行结果 + 指标采集（非阻塞，paused 不审计终态）
-            if final_status in ("completed", "failed"):
-                record_workflow_execution(final_status)
-                from app.service.audit_service import audit_service
-                from app.utils.context import get_request_id
-                try:
-                    await audit_service.log_action(
-                        user_id=user_id, action="workflow.execute",
-                        workflow_id=execution_id, input_data=inputs,
-                        output_data=outputs, status=final_status,
-                        request_id=get_request_id(),
-                    )
-                except Exception as audit_e:
-                    log.warning("audit workflow {} failed: {}", execution_id, audit_e)
-
-            # Sprint 6.3: IM 双向回调 — IM 触发的工作流完成后，结果回传原会话
-            if chat_id and final_status in ("completed", "failed"):
-                try:
-                    from app.service.im_push_service import im_push_service
-                    await im_push_service.push_workflow_result(
-                        workflow_id, chat_id, inputs, outputs, final_status,
-                    )
-                except Exception as cb_e:
-                    log.warning("IM callback for workflow {} failed: {}", execution_id, cb_e)
-
-    async def _update_execution(
-        self,
-        execution_id: str,
-        status: Optional[str] = None,
-        current_node: Optional[str] = None,
-        outputs: Optional[dict] = None,
-        error: Optional[dict] = None,
-    ) -> None:
-        """更新执行实例状态"""
-        update_data: dict = {}
-        if status:
-            update_data["status"] = status
-            if status in ("completed", "failed", "cancelled"):
-                update_data["finished_at"] = datetime.now()
-        if current_node is not None:
-            update_data["current_node"] = current_node
-        if outputs is not None:
-            update_data["outputs"] = outputs
-        if error is not None:
-            update_data["error"] = error
-
-        from sqlalchemy import update as sa_update
-        async with get_db_session() as session:
-            await session.execute(
-                sa_update(WorkflowExecutionORM)
-                .where(WorkflowExecutionORM.id == execution_id)
-                .values(**update_data)
-            )
 
 
 workflow_service = WorkflowService()

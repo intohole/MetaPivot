@@ -19,7 +19,8 @@ from typing import Optional
 
 from sqlalchemy import select
 
-from app.infra.db.models_core import AgentTaskORM, AgentTaskStepORM, WorkflowORM
+from app.infra.db.models_agent import AgentTaskORM, AgentTaskStepORM
+from app.infra.db.models_core import WorkflowORM
 from app.infra.db.session import get_db_session
 from app.utils.logger import get_logger
 from app.utils.response import AppError, ErrorCode

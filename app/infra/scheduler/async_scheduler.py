@@ -12,8 +12,10 @@ Phase 5 增强：
 - PostgreSQL SELECT FOR UPDATE SKIP LOCKED 多实例防重（SQLite 单机无需）
 - cron_expr 支持标准 5 段 cron（croniter 解析，比 timedelta 精确）
 
+Sprint 8.1: 执行/失败/IM推送逻辑拆离到 scheduler_executor.py，保持本文件 ≤ 300 行。
+
 容错：
-- 单次任务执行失败调用 _handle_failure（重试或入 DLQ）
+- 单次任务执行失败调用 scheduler_executor.handle_failure（重试或入 DLQ）
 - 轮询任务异常不退出循环（catch all + log）
 """
 import asyncio
@@ -33,10 +35,43 @@ log = get_logger("scheduler")
 
 # 轮询间隔（秒）
 _POLL_INTERVAL = 30
-# 单次执行超时（秒）— 仅保护调度循环，不限制 Agent 任务本身
-_TRIGGER_TIMEOUT = 10
 # 默认最大重试次数（DB 字段缺省时的兜底）
 _DEFAULT_MAX_RETRIES = 3
+
+
+def compute_next_run(recurring: str) -> Optional[datetime]:
+    """根据 recurring 模式计算下次执行时间（cron_expr 为空时使用）
+
+    Sprint 8.1: 从 AsyncScheduler._compute_next_run 迁移为模块级函数，
+    供 scheduler_executor.execute_one 复用。
+    """
+    now = datetime.now()
+    if recurring == "daily":
+        return now + timedelta(days=1)
+    if recurring == "weekly":
+        return now + timedelta(weeks=1)
+    if recurring == "monthly":
+        return now + timedelta(days=30)  # 近似，月长度不固定
+    return None
+
+
+def _to_dict(t: ScheduledTaskORM) -> dict:
+    """ORM → dict 序列化（供 list_pending/list_dlq 返回）"""
+    return {
+        "id": t.id, "message": t.message, "description": t.description,
+        "run_at": t.run_at.isoformat() if t.run_at else None,
+        "recurring": t.recurring,
+        "cron_expr": t.cron_expr,
+        "next_run_at": t.next_run_at.isoformat() if t.next_run_at else None,
+        "status": t.status, "channel": t.channel,
+        "chat_id": t.chat_id, "user_id": t.user_id,
+        "last_run_at": t.last_run_at.isoformat() if t.last_run_at else None,
+        "retry_count": t.retry_count, "max_retries": t.max_retries,
+        "next_retry_at": t.next_retry_at.isoformat() if t.next_retry_at else None,
+        "last_error": t.last_error,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+    }
 
 
 class AsyncScheduler(IScheduler):
@@ -63,9 +98,8 @@ class AsyncScheduler(IScheduler):
         优先级：cron_expr > run_at > recurring
         - cron_expr 非空：用 croniter 计算首次 next_run_at
         - run_at 非空：一次性任务，next_run_at = run_at
-        - recurring != "none"：用 _compute_next_run 计算周期
+        - recurring != "none"：用 compute_next_run 计算周期
         """
-        # 计算首次执行时间
         if cron_expr:
             next_run = _cron_next(cron_expr)
             if next_run is None:
@@ -73,7 +107,7 @@ class AsyncScheduler(IScheduler):
         elif run_at:
             next_run = run_at
         else:
-            next_run = self._compute_next_run(recurring)
+            next_run = compute_next_run(recurring)
         if next_run is None:
             raise ValueError("必须提供 run_at / recurring / cron_expr 之一")
 
@@ -101,17 +135,6 @@ class AsyncScheduler(IScheduler):
             )
             return task.id
 
-    def _compute_next_run(self, recurring: str) -> Optional[datetime]:
-        """根据 recurring 模式计算下次执行时间（cron_expr 为空时使用）"""
-        now = datetime.now()
-        if recurring == "daily":
-            return now + timedelta(days=1)
-        if recurring == "weekly":
-            return now + timedelta(weeks=1)
-        if recurring == "monthly":
-            return now + timedelta(days=30)  # 近似，月长度不固定
-        return None
-
     async def cancel(self, task_id: int) -> bool:
         """取消未执行的定时任务"""
         async with get_db_session() as session:
@@ -135,7 +158,7 @@ class AsyncScheduler(IScheduler):
             if user_id:
                 stmt = stmt.where(ScheduledTaskORM.user_id == user_id)
             rows = (await session.execute(stmt)).scalars().all()
-            return [self._to_dict(t) for t in rows]
+            return [_to_dict(t) for t in rows]
 
     async def list_dlq(
         self, user_id: str = "", page: int = 1, page_size: int = 20,
@@ -160,7 +183,7 @@ class AsyncScheduler(IScheduler):
             )
             rows = (await session.execute(stmt)).scalars().all()
             return {
-                "items": [self._to_dict(t) for t in rows],
+                "items": [_to_dict(t) for t in rows],
                 "total": total, "page": page, "page_size": page_size,
             }
 
@@ -180,24 +203,6 @@ class AsyncScheduler(IScheduler):
             await session.flush()
             log.info("DLQ task retried: id={} by user={}", task_id, user_id or "admin")
             return True
-
-    @staticmethod
-    def _to_dict(t: ScheduledTaskORM) -> dict:
-        return {
-            "id": t.id, "message": t.message, "description": t.description,
-            "run_at": t.run_at.isoformat() if t.run_at else None,
-            "recurring": t.recurring,
-            "cron_expr": t.cron_expr,
-            "next_run_at": t.next_run_at.isoformat() if t.next_run_at else None,
-            "status": t.status, "channel": t.channel,
-            "chat_id": t.chat_id, "user_id": t.user_id,
-            "last_run_at": t.last_run_at.isoformat() if t.last_run_at else None,
-            "retry_count": t.retry_count, "max_retries": t.max_retries,
-            "next_retry_at": t.next_retry_at.isoformat() if t.next_retry_at else None,
-            "last_error": t.last_error,
-            "created_at": t.created_at.isoformat() if t.created_at else None,
-            "updated_at": t.updated_at.isoformat() if t.updated_at else None,
-        }
 
     async def start(self) -> None:
         """启动后台轮询任务"""
@@ -233,6 +238,8 @@ class AsyncScheduler(IScheduler):
         PostgreSQL 用 SELECT FOR UPDATE SKIP LOCKED 多实例防重；
         SQLite 单机无需 SKIP LOCKED。
         """
+        from app.infra.scheduler.scheduler_executor import execute_one
+
         now = datetime.now()
         async with get_db_session() as session:
             stmt = (
@@ -244,13 +251,11 @@ class AsyncScheduler(IScheduler):
                 .order_by(ScheduledTaskORM.next_run_at.asc())
                 .limit(50)
             )
-            # PostgreSQL 多实例防重
             if settings.db_backend == "postgresql":
                 stmt = stmt.with_for_update(skip_locked=True)
             tasks = (await session.execute(stmt)).scalars().all()
             if not tasks:
                 return
-            # 标记为 running 避免重复触发
             for t in tasks:
                 t.status = "running"
                 t.last_run_at = now
@@ -258,112 +263,12 @@ class AsyncScheduler(IScheduler):
             task_ids = [t.id for t in tasks]
             log.info("Triggering {} due scheduled tasks: {}", len(tasks), task_ids)
 
-        # 异步触发执行（不阻塞轮询循环）
+        # 异步触发执行（不阻塞轮询循环）— Sprint 8.1: 委托给 scheduler_executor
         for t in tasks:
-            asyncio.create_task(self._execute_one(
+            asyncio.create_task(execute_one(
                 t.id, t.message, t.channel, t.chat_id, t.user_id,
                 t.context, t.recurring, t.cron_expr,
             ))
-
-    async def _execute_one(
-        self, task_id: int, message: str, channel: str,
-        chat_id: Optional[str], user_id: Optional[str],
-        context: dict, recurring: str, cron_expr: Optional[str],
-    ) -> None:
-        """执行单个定时任务（调用 AgentService）
-
-        失败时调用 _handle_failure 进行重试或入 DLQ。
-        Sprint 6.4: IM 渠道任务触发后异步推送结果到原会话（fire-and-forget）。
-        """
-        agent_task_id = ""
-        try:
-            from app.service.agent_service import agent_service
-            result = await asyncio.wait_for(
-                agent_service.start_task(
-                    message=message, channel=channel,
-                    chat_id=chat_id or "", user_id=user_id or "",
-                    context=context or {}, stream=False,
-                ),
-                timeout=_TRIGGER_TIMEOUT,
-            )
-            agent_task_id = result.get("task_id", "") if isinstance(result, dict) else ""
-            log.info("Scheduled task executed: id={} agent_task={}", task_id, agent_task_id)
-        except Exception as e:
-            log.exception("Scheduled task execution failed: id={} err={}", task_id, e)
-            await self._handle_failure(task_id, {"code": "EXEC_ERROR", "message": str(e)})
-            return
-
-        # Sprint 6.4: IM 渠道的定时任务 → 异步推送 Agent 结果到原会话（不阻塞调度循环）
-        if agent_task_id and chat_id and channel and channel != "api":
-            asyncio.create_task(self._push_result_to_im(
-                agent_task_id, channel, chat_id, message,
-            ))
-
-        # 更新状态：周期性 → 计算下次执行；一次性 → completed
-        async with get_db_session() as session:
-            task = await session.get(ScheduledTaskORM, task_id)
-            if task is None:
-                return
-            if cron_expr:
-                # cron 任务：用 croniter 计算下次
-                nxt = _cron_next(cron_expr)
-                if nxt:
-                    task.status = "pending"
-                    task.next_run_at = nxt
-                else:
-                    task.status = "completed"
-            elif recurring == "none":
-                task.status = "completed"
-            else:
-                task.status = "pending"
-                task.next_run_at = self._compute_next_run(recurring)
-            await session.flush()
-
-    async def _push_result_to_im(
-        self, agent_task_id: str, channel: str, chat_id: str, message: str,
-    ) -> None:
-        """Sprint 6.4: 异步推送 Agent 结果到 IM（fire-and-forget 包装）"""
-        try:
-            from app.service.im_push_service import im_push_service
-            await im_push_service.push_agent_result(
-                task_id=agent_task_id, channel=channel,
-                chat_id=chat_id, trigger_message=message,
-            )
-        except Exception as e:
-            log.warning("IM push for agent task {} failed: {}", agent_task_id, e)
-
-    async def _handle_failure(self, task_id: int, error: dict) -> None:
-        """失败处理：重试（指数退避）或进入 DLQ
-
-        - retry_count += 1
-        - 若 < max_retries：状态回 pending，next_retry_at = now + 2^retry_count * 60s
-        - 若 >= max_retries：状态 failed，进入 DLQ
-        """
-        async with get_db_session() as session:
-            task = await session.get(ScheduledTaskORM, task_id)
-            if task is None:
-                return
-            task.retry_count = (task.retry_count or 0) + 1
-            task.last_error = error
-            max_r = task.max_retries or _DEFAULT_MAX_RETRIES
-            if task.retry_count < max_r:
-                # 重试：状态回 pending，指数退避
-                backoff = (2 ** task.retry_count) * 60  # 2min, 4min, 8min...
-                task.status = "pending"
-                task.next_run_at = datetime.now() + timedelta(seconds=backoff)
-                task.next_retry_at = task.next_run_at
-                log.warning(
-                    "Task {} retry {}/{} backoff={}s",
-                    task_id, task.retry_count, max_r, backoff,
-                )
-            else:
-                # 进入 DLQ
-                task.status = "failed"
-                log.error(
-                    "Task {} entered DLQ after {} retries: {}",
-                    task_id, task.retry_count, error,
-                )
-            await session.flush()
 
     async def health(self) -> bool:
         """健康检查：DB 可达 + 轮询任务存活"""

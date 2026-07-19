@@ -10,7 +10,7 @@
 """
 from sqlalchemy import update, select
 
-from app.infra.db.models_core import AgentTaskORM
+from app.infra.db.models_agent import AgentTaskORM
 from app.infra.db.session import get_db_session
 from app.utils.logger import get_logger
 

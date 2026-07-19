@@ -9,6 +9,8 @@
   4. 创建 SkillRevisionORM（pending/auto_merged）
   5. 高置信度(≥0.9)自动合并；否则等待人工 Review
 
+Sprint 8.1: 熔断逻辑（check_and_circuit_break + 统计）抽离到 circuit_breaker.py。
+
 设计原则：
   - 用低成本模型（temperature=0.1）做优化分析
   - 每日每 Skill 最多优化 1 次（防成本失控）
@@ -18,8 +20,13 @@ import json
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
+from app.domain.skill.circuit_breaker import (
+    CIRCUIT_BREAK_FAILURE_RATE,
+    get_execution_stats,
+    safe_circuit_break_check,
+)
 from app.infra.db.models_user_skill import (
     SkillExecutionORM, SkillORM, SkillRevisionORM,
 )
@@ -34,11 +41,6 @@ FAILURE_RATE_THRESHOLD = 0.3  # 失败率 > 30% 触发优化
 MIN_EXECUTIONS_FOR_OPT = 3   # 至少 3 次执行才分析
 AUTO_MERGE_CONFIDENCE = 0.9  # 置信度 ≥ 0.9 自动合并
 OPTIMIZE_COOLDOWN_HOURS = 24  # 同一 Skill 24h 内不重复优化
-
-# 自动熔断阈值（circuit breaker）：失败率过高自动禁用，防止坏技能持续损害体验
-CIRCUIT_BREAK_FAILURE_RATE = 0.6  # 失败率 ≥ 60% 触发熔断
-CIRCUIT_BREAK_MIN_EXECUTIONS = 5  # 至少 5 次执行才熔断（避免样本过小误判）
-CIRCUIT_BREAK_WINDOW_HOURS = 24   # 统计窗口（近 24h）
 
 OPTIMIZE_PROMPT = """你是 Skill 优化专家。给定一个 Skill 的当前定义和近期失败执行记录，分析失败模式并生成优化建议。
 
@@ -91,54 +93,7 @@ async def record_execution(
         from app.utils.config import settings
         if settings.skill_circuit_breaker_enabled:
             import asyncio
-            asyncio.create_task(_safe_circuit_break_check(skill_id, skill_name))
-
-
-async def _safe_circuit_break_check(skill_id: str, skill_name: str) -> None:
-    """包装熔断检查，吞异常避免 fire-and-forget 任务静默崩溃"""
-    try:
-        await check_and_circuit_break(skill_id, skill_name)
-    except Exception as e:
-        log.warning("circuit break check failed for skill {}: {}", skill_id, e)
-
-
-async def check_and_circuit_break(skill_id: str, skill_name: str = "") -> dict:
-    """检查 Skill 是否应熔断：近 24h 失败率 ≥ 60% 且 ≥ 5 次执行 → 自动禁用
-
-    熔断后在 changelog 追加 {source: "circuit_breaker"} 标记，前端据此显示熔断 badge。
-    Returns: {tripped, reason, failure_rate?, total?}
-    """
-    stats = await _get_execution_stats(
-        skill_id, window_hours=CIRCUIT_BREAK_WINDOW_HOURS,
-    )
-    if stats["total"] < CIRCUIT_BREAK_MIN_EXECUTIONS:
-        return {"tripped": False, "reason": "insufficient_data", "total": stats["total"]}
-    if stats["failure_rate"] < CIRCUIT_BREAK_FAILURE_RATE:
-        return {"tripped": False, "reason": "healthy", "failure_rate": stats["failure_rate"]}
-
-    # 触发熔断
-    async with get_db_session() as session:
-        skill = await session.get(SkillORM, skill_id)
-        if skill is None:
-            return {"tripped": False, "reason": "skill_not_found"}
-        if not skill.enabled:
-            # 已禁用（可能是手动禁用或已熔断），不重复操作
-            return {"tripped": False, "reason": "already_disabled"}
-        skill.enabled = False
-        skill.changelog = [*skill.changelog, {
-            "version": skill.version, "change": f"自动熔断：近{CIRCUIT_BREAK_WINDOW_HOURS}h失败率 {stats['failure_rate']:.0%}（{stats['failed']}/{stats['total']}）",
-            "source": "circuit_breaker", "at": datetime.now().isoformat(),
-            "failure_rate": round(stats["failure_rate"], 3),
-        }]
-        await session.flush()
-        log.warning(
-            "Skill circuit-break tripped: {} ({}) fail_rate={:.0%} ({}/{})",
-            skill_id, skill_name or skill.name, stats["failure_rate"], stats["failed"], stats["total"],
-        )
-        return {
-            "tripped": True, "reason": "failure_rate_exceeded",
-            "failure_rate": stats["failure_rate"], "total": stats["total"],
-        }
+            asyncio.create_task(safe_circuit_break_check(skill_id, skill_name))
 
 
 async def check_and_optimize(skill_id: str) -> dict:
@@ -151,7 +106,7 @@ async def check_and_optimize(skill_id: str) -> dict:
         return {"optimized": False, "reason": "in_cooldown"}
 
     # 2. 收集近期执行统计
-    stats = await _get_execution_stats(skill_id)
+    stats = await get_execution_stats(skill_id)
     if stats["total"] < MIN_EXECUTIONS_FOR_OPT:
         return {"optimized": False, "reason": "insufficient_data", "executions": stats["total"]}
 
@@ -167,40 +122,6 @@ async def check_and_optimize(skill_id: str) -> dict:
     if revision_id:
         return {"optimized": True, "revision_id": revision_id, "failure_rate": stats["failure_rate"]}
     return {"optimized": False, "reason": "optimization_failed"}
-
-
-async def _get_execution_stats(skill_id: str, window_hours: int = 168) -> dict:
-    """获取 Skill 近 window_hours 小时的执行统计（默认 7 天）"""
-    since = datetime.now() - timedelta(hours=window_hours)
-    async with get_db_session() as session:
-        # 总执行数
-        total_stmt = select(func.count()).where(
-            SkillExecutionORM.skill_id == skill_id,
-            SkillExecutionORM.created_at >= since,
-        )
-        total = (await session.execute(total_stmt)).scalar() or 0
-
-        # 失败数
-        fail_count_stmt = select(func.count()).where(
-            SkillExecutionORM.skill_id == skill_id,
-            SkillExecutionORM.status == "failed",
-            SkillExecutionORM.created_at >= since,
-        )
-        failed = (await session.execute(fail_count_stmt)).scalar() or 0
-
-        # 失败记录详情（取最近 5 条）
-        fail_stmt = select(SkillExecutionORM).where(
-            SkillExecutionORM.skill_id == skill_id,
-            SkillExecutionORM.status == "failed",
-            SkillExecutionORM.created_at >= since,
-        ).order_by(SkillExecutionORM.created_at.desc()).limit(5)
-        failures = (await session.execute(fail_stmt)).scalars().all()
-
-    return {
-        "total": total, "failed": failed,
-        "failure_rate": failed / total if total > 0 else 0.0,
-        "failures": failures,
-    }
 
 
 async def _in_cooldown(skill_id: str) -> bool:
@@ -294,7 +215,7 @@ async def _generate_optimization(skill_id: str, stats: dict) -> Optional[str]:
 
 async def get_skill_health(skill_id: str) -> dict:
     """获取 Skill 健康度（成功率/失败率/近期趋势/熔断状态）"""
-    stats = await _get_execution_stats(skill_id)
+    stats = await get_execution_stats(skill_id)
     failure_rate = stats["failure_rate"]
     health = (
         "healthy" if failure_rate < FAILURE_RATE_THRESHOLD

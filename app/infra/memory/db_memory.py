@@ -15,7 +15,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.infra.db.models_core import ChatMessageORM, ChatSummaryORM
+from app.infra.db.models_agent import ChatMessageORM, ChatSummaryORM
 from app.infra.db.session import get_db_session
 from app.utils.config import settings
 from app.utils.logger import get_logger

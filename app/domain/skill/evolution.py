@@ -13,7 +13,7 @@ from typing import Optional
 
 from sqlalchemy import select
 
-from app.infra.db.models_core import AgentTaskORM, AgentTaskStepORM
+from app.infra.db.models_agent import AgentTaskORM, AgentTaskStepORM
 from app.infra.db.models_user_skill import (
     SkillDraftORM, SkillORM, SkillRevisionORM,
 )

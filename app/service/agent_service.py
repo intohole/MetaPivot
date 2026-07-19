@@ -23,7 +23,7 @@ from app.domain.contracts.judge import IJudge
 from app.domain.contracts.memory import IMemoryStore
 from app.domain.contracts.retrieval import IQueryRouter, IRetriever
 from app.domain.contracts.verifier import IVerifier
-from app.infra.db.models_core import AgentTaskORM
+from app.infra.db.models_agent import AgentTaskORM
 from app.infra.db.session import get_db_session
 from app.service.agent_persister import (
     audit_task_event,

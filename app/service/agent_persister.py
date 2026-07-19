@@ -9,7 +9,7 @@ from typing import Optional
 from sqlalchemy import func, select, update
 
 from app.domain.agent.state import AgentState, AgentStatus
-from app.infra.db.models_core import AgentTaskEventORM, AgentTaskORM, AgentTaskStepORM
+from app.infra.db.models_agent import AgentTaskEventORM, AgentTaskORM, AgentTaskStepORM
 from app.infra.db.session import get_db_session
 
 

@@ -8,7 +8,6 @@
 
 依赖方向：Service → Infra（MCPClient/call_function）+ Data（ORM）
 """
-import asyncio
 from datetime import datetime
 from typing import Optional
 
@@ -17,7 +16,6 @@ from sqlalchemy import func, select
 from app.infra.db.models_user_skill import SkillORM
 from app.infra.db.session import get_db_session
 from app.utils.logger import get_logger
-from app.utils.metrics import record_skill_call
 from app.utils.response import AppError, ErrorCode
 
 log = get_logger("skill_service")
@@ -176,97 +174,17 @@ class SkillService:
         from app.domain.skill.recorder import record_task_to_skill as _impl
         return await _impl(task_id, name, description, owner_id, tags)
 
-    # ============ 执行 ============
+    # ============ 执行（Sprint 8.1: 委托给 skill_executor） ============
 
     async def execute(self, skill_id: str, args: dict, user_id: str = "") -> dict:
-        """执行 Skill，按 source_type 路由"""
-        skill = await self.get_skill(skill_id)
-        if not skill.enabled:
-            raise AppError(ErrorCode.SKILL_DISABLED, status_code=403)
-
-        started = datetime.now()
-        result: dict
-        try:
-            if skill.source_type == "function":
-                from app.infra.tools.registry import call_function
-                result = await call_function(skill.source_ref, args)
-            elif skill.source_type == "mcp":
-                from app.infra.mcp.client import mcp_client
-                # source_ref 格式：mcp_server_name.tool_name
-                parts = skill.source_ref.split(".", 1)
-                if len(parts) != 2:
-                    raise AppError(ErrorCode.SKILL_EXECUTION_FAILED, "MCP source_ref 格式错误")
-                result = await mcp_client.call(parts[0], parts[1], args)
-            elif skill.source_type == "workflow":
-                from app.service.workflow_service import workflow_service
-                wf_result = await workflow_service.execute_workflow(
-                    workflow_id=skill.source_ref, inputs=args, user_id=user_id
-                )
-                result = {"execution_id": wf_result.get("execution_id")}
-            else:
-                raise AppError(ErrorCode.SKILL_EXECUTION_FAILED, f"未知 source_type: {skill.source_type}")
-        except AppError:
-            raise
-        except Exception as e:
-            log.exception("Skill execute failed: {}", skill.name)
-            result = {"error": str(e)}
-
-        duration = int((datetime.now() - started).total_seconds() * 1000)
-        await self._incr_call_count(skill_id)
-        skill_status = "success" if "error" not in result else "failed"
-        # 写审计 + 指标采集
-        from app.service.audit_service import audit_service
-        await audit_service.log_action(
-            user_id=user_id, action="skill.call", skill_id=skill_id,
-            input_data=args, output_data=result, duration_ms=duration,
-            status=skill_status,
-        )
-        record_skill_call(skill.name, skill_status)
-        # Skill 自进化：记录执行结果供 optimizer 分析（fire-and-forget，不阻塞响应）
-        asyncio.create_task(_record_execution_safe(
-            skill_id=skill_id, skill_name=skill.name, status=skill_status,
-            duration_ms=duration, args_summary=_safe_args_summary(args),
-            error_message=result.get("error", "") if skill_status == "failed" else "",
-        ))
-        return result
+        """执行 Skill，按 source_type 路由（委托给 skill_executor.execute）"""
+        from app.service.skill_executor import execute as _execute
+        return await _execute(self, skill_id, args, user_id)
 
     async def test_skill(self, skill_id: str, args: dict) -> dict:
         """测试 Skill（不写审计、不增加 call_count，用于管理后台）"""
-        from datetime import datetime
-        started = datetime.now()
-        try:
-            result = await self._execute_raw(skill_id, args)
-            duration = int((datetime.now() - started).total_seconds() * 1000)
-            return {
-                "success": "error" not in result,
-                "result": result,
-                "duration_ms": duration,
-                "error": result.get("error"),
-            }
-        except AppError as e:
-            return {"success": False, "error": {"code": e.code, "message": e.message}, "duration_ms": 0}
-
-    async def _execute_raw(self, skill_id: str, args: dict) -> dict:
-        """执行 Skill 但不写审计、不增加 call_count（测试用）"""
-        skill = await self.get_skill(skill_id)
-        if not skill.enabled:
-            raise AppError(ErrorCode.SKILL_DISABLED, status_code=403)
-        if skill.source_type == "function":
-            from app.infra.tools.registry import call_function
-            return await call_function(skill.source_ref, args)
-        elif skill.source_type == "mcp":
-            from app.infra.mcp.client import mcp_client
-            parts = skill.source_ref.split(".", 1)
-            if len(parts) != 2:
-                raise AppError(ErrorCode.SKILL_EXECUTION_FAILED, "MCP source_ref 格式错误")
-            return await mcp_client.call(parts[0], parts[1], args)
-        elif skill.source_type == "workflow":
-            from app.service.workflow_service import workflow_service
-            wf_result = await workflow_service.execute_workflow(
-                workflow_id=skill.source_ref, inputs=args, user_id="test"
-            )
-            return {"execution_id": wf_result.get("execution_id")}
-        raise AppError(ErrorCode.SKILL_EXECUTION_FAILED, f"未知 source_type: {skill.source_type}")
+        from app.service.skill_executor import test_skill as _test
+        return await _test(self, skill_id, args)
 
     # ============ Agent 工具列表 ============
 
