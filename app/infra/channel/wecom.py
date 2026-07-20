@@ -1,12 +1,11 @@
 """企业微信适配器 - Webhook模式(HTTPS+AES加密)接收 + 主动发消息API发送"""
 import asyncio
 import base64
-import hashlib
 import socket
 import struct
 import time
 import xml.etree.ElementTree as ET
-from typing import Any, Optional
+from typing import Optional
 
 import httpx
 
@@ -106,10 +105,8 @@ class WeComAdapter(ChannelAdapter):
     async def receive_message(self, raw_xml: str) -> UnifiedMessage:
         """解析企微 XML 消息（已解密）"""
         root = ET.fromstring(raw_xml)
-        msg_type = root.findtext("MsgType", "text")
         content = root.findtext("Content", "")
         from_user = root.findtext("FromUserName", "")
-        to_user = root.findtext("ToUserName", "")
         msg_id = root.findtext("MsgId", "")
         chat_id = root.findtext("ChatId", from_user)
         create_time = root.findtext("CreateTime", str(int(time.time())))

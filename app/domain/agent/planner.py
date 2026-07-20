@@ -16,7 +16,6 @@
 - 失败不阻塞（plan 为空时 executor 仍可正常 tool_choice="auto"）
 """
 import json
-from typing import Optional
 
 from app.domain.agent.prompts import PLAN_PROMPT
 from app.domain.agent.state import AgentState

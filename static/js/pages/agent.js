@@ -387,13 +387,13 @@
 
       onMounted(async () => {
         await loadHistory()
-        if (state.pendingMessage) {
-          inputMsg.value = state.pendingMessage; state.pendingMessage = ''
+        if (state.pendingMessage.value) {
+          inputMsg.value = state.pendingMessage.value; state.pendingMessage.value = ''
           nextTick(() => sendMessage())
         }
         // Phase 3: Command Palette 联动 — 保存最近任务为 Skill
-        if (state.pendingAction === 'save-last-task-as-skill') {
-          state.pendingAction = ''
+        if (state.pendingAction.value === 'save-last-task-as-skill') {
+          state.pendingAction.value = ''
           if (history.value.length > 0) {
             currentTaskId.value = history.value[0].task_id
             nextTick(() => saveAsSkill())

@@ -3,10 +3,10 @@
 挂在 /api/v1 下，路由内部包含 /users、/roles、/configs 子路径。
 """
 from __future__ import annotations
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
-from app.route.depend import ok, paginate
+from app.route.depend import ok, page_params, paginate, PaginationParams
 from app.service.auth_service import (
     CurrentUser,
     create_user,
@@ -38,14 +38,13 @@ class UserUpdateRequest(BaseModel):
 @router.get("/users", summary="用户列表")
 async def users(
     request: Request,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    pg: PaginationParams = Depends(page_params),
     keyword: str = "",
     role: str = "",
     user: CurrentUser = Depends(require_permission("user:read")),
 ):
-    items, total = await list_users(page, page_size, keyword, role)
-    return ok(paginate([_user_dict(u) for u in items], total, page, page_size), request)
+    items, total = await list_users(pg.page, pg.page_size, keyword, role)
+    return ok(paginate([_user_dict(u) for u in items], total, pg.page, pg.page_size), request)
 
 
 @router.post("/users", status_code=201, summary="创建用户")

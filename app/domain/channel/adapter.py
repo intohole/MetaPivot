@@ -1,6 +1,6 @@
 """Channel适配器抽象基类"""
 from abc import ABC, abstractmethod
-from typing import Any, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 from app.domain.channel.models import (
     CardCallback,

@@ -10,11 +10,9 @@
     name: 'SchedulesPage',
     setup() {
       const state = window.AppState
-      const list = ref([])
-      const total = ref(0)
-      const page = ref(1)
-      const pageSize = ref(20)
-      const loading = ref(false)
+      // useListPage 统一分页加载/翻页（消除重复样板）
+      const lp = window.useListPage('/schedules', { failMsg: '加载定时任务失败', withKeyword: false })
+      const { list, total, page, pageSize, loading, loadList, onPageChange } = lp
 
       const columns = computed(() => [
         { key: 'id', label: 'ID', width: '60px' },
@@ -24,17 +22,6 @@
         { key: 'status', label: '状态', width: '90px' },
         { key: 'actions', label: '操作', width: '100px', align: 'center' }
       ])
-
-      const loadList = async () => {
-        loading.value = true
-        try {
-          const res = await window.API.get('/schedules', { page: page.value, page_size: pageSize.value })
-          list.value = res.items || []
-          total.value = res.total || 0
-        } catch (e) {
-          state.notify('加载定时任务失败：' + (e.message || ''), 'error')
-        } finally { loading.value = false }
-      }
 
       const cancelTask = async (row) => {
         const act = await state.confirmAction({
@@ -48,8 +35,6 @@
           loadList()
         } catch (e) { state.notify('取消失败：' + (e.message || ''), 'error') }
       }
-
-      const onPageChange = ({ page: p }) => { page.value = p; loadList() }
 
       // 触发方式渲染：cron_expr 优先 > run_at 一次性 > recurring 周期
       const triggerInfo = (row) => {
@@ -68,7 +53,7 @@
         pending: '待执行', running: '执行中', completed: '已完成', failed: '失败', cancelled: '已取消'
       }[s] || s)
 
-      const fmtTime = (t) => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '-'
+      const fmtTime = window.Format.time
 
       const goDlq = () => state.navigate('/dlq')
 
@@ -118,7 +103,7 @@
             </template>
           </base-table>
           <div v-if="total > pageSize" class="mt-4 flex justify-center">
-            <pagination :current="page" :total="total" :page-size="pageSize" @change="onPageChange" />
+            <pagination :page="page" :total="total" :page-size="pageSize" @change="onPageChange" />
           </div>
         </base-card>
       </div>

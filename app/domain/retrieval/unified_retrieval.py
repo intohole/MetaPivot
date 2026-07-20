@@ -11,7 +11,7 @@ agent 通过 QueryRouter 决定意图后调 retrieve()，或 fallback 用 retrie
 依赖通过构造函数 DI 注入，不直接 import infra 层（保持分层依赖方向）。
 """
 import asyncio
-from typing import Any, Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 from app.domain.contracts.llm import ILLMProvider
 from app.domain.contracts.memory import IMemoryStore

@@ -20,7 +20,7 @@
 - 纯函数（除 summarize 外），无副作用
 - 显式注入 token_counter 依赖（便于测试替换）
 """
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from app.utils.logger import get_logger
 

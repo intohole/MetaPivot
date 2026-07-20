@@ -1,7 +1,7 @@
 """知识库路由 - 文档上传、查询、删除、检索"""
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 
-from app.route.depend import ok, paginate
+from app.route.depend import ok, page_params, paginate, PaginationParams
 from app.service.auth_service import CurrentUser, require_permission
 
 router = APIRouter()
@@ -22,14 +22,13 @@ async def upload_document(
 @router.get("/documents", summary="文档列表")
 async def list_documents(
     request: Request,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    pg: PaginationParams = Depends(page_params),
     status: str = "",
     user: CurrentUser = Depends(require_permission("knowledge:read")),
 ):
     from app.service.knowledge_service import knowledge_service
-    items, total = await knowledge_service.list_documents(page, page_size, status)
-    return ok(paginate(items, total, page, page_size), request)
+    items, total = await knowledge_service.list_documents(pg.page, pg.page_size, status)
+    return ok(paginate(items, total, pg.page, pg.page_size), request)
 
 
 @router.delete("/documents/{document_id}", summary="删除文档")

@@ -9,12 +9,12 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from app.domain.contracts.scheduler import IScheduler
 from app.infra.scheduler.factory import get_scheduler
-from app.route.depend import ok
+from app.route.depend import ok, page_params, paginate, PaginationParams
 from app.service.auth_service import CurrentUser, get_current_user
 from app.utils.response import AppError, ErrorCode
 
@@ -61,14 +61,13 @@ async def create_schedule(
 @router.get("", summary="查询定时任务列表")
 async def list_schedules(
     request: Request,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    pg: PaginationParams = Depends(page_params),
     user: CurrentUser = Depends(get_current_user),
 ):
     """查询待执行的定时任务"""
     scheduler = await _get_scheduler()
-    items = await scheduler.list_pending(user_id=user.user_id, limit=page_size)
-    return ok({"items": items, "total": len(items), "page": page, "page_size": page_size}, request)
+    items = await scheduler.list_pending(user_id=user.user_id, limit=pg.page_size)
+    return ok(paginate(items, len(items), pg.page, pg.page_size), request)
 
 
 @router.get("/{task_id}", summary="查询单个定时任务")

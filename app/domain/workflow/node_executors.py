@@ -19,9 +19,8 @@
 """
 import asyncio
 import operator
-from typing import Any
 
-from app.domain.workflow.http_node import exec_http_request
+from app.domain.workflow.http_node import exec_http_request  # noqa: F401  再导出（engine 统一入口）
 from app.domain.workflow.variables import resolve_vars as _resolve_vars
 from app.domain.workflow.variables import resolve_vars_str as _resolve_vars_str
 from app.utils.logger import get_logger

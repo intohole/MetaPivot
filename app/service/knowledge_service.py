@@ -8,14 +8,12 @@
 """
 import os
 import uuid
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import func, select
 
 from app.infra.db.models_core import KnowledgeDocumentORM
 from app.infra.db.session import get_db_session
-from app.utils.config import settings
 from app.utils.logger import get_logger
 from app.utils.response import AppError, ErrorCode
 

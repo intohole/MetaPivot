@@ -6,7 +6,6 @@
 3. 持久化 IM 消息到 DB（用于审计与上下文）
 4. 解耦 IM 适配器层与 Agent 层（处理器动态注册，避免循环依赖）
 """
-from datetime import datetime
 from typing import Awaitable, Callable, Optional
 
 from sqlalchemy import select

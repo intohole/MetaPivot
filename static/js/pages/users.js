@@ -7,13 +7,14 @@
     name: 'UsersPage',
     setup() {
       const state = window.AppState
-      const list = ref([])
-      const total = ref(0)
-      const page = ref(1)
-      const pageSize = ref(20)
-      const keyword = ref('')
       const roleFilter = ref('')
-      const loading = ref(false)
+
+      // useListPage 统一分页加载/搜索/翻页（消除重复样板）
+      const lp = window.useListPage('/users', {
+        failMsg: '加载用户列表失败',
+        extraParams: () => ({ role: roleFilter.value })
+      })
+      const { list, total, page, pageSize, keyword, loading, loadList, onPageChange, onSearch } = lp
 
       const showForm = ref(false)
       const editingId = ref('')
@@ -32,18 +33,6 @@
         { key: 'created_at', label: '创建时间', width: '160px' },
         { key: 'actions', label: '操作', width: '140px', align: 'center' }
       ])
-
-      const loadList = async () => {
-        loading.value = true
-        try {
-          const res = await window.API.get('/users', {
-            page: page.value, page_size: pageSize.value,
-            keyword: keyword.value, role: roleFilter.value
-          })
-          list.value = res.items || []
-          total.value = res.total || 0
-        } finally { loading.value = false }
-      }
 
       const loadRoles = async () => {
         try {
@@ -109,9 +98,6 @@
           state.notify('操作失败：' + (e.message || '未知错误'), 'error')
         }
       }
-
-      const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }
-      const onSearch = () => { page.value = 1; loadList() }
 
       onMounted(() => { loadList(); loadRoles() })
 

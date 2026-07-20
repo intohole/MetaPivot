@@ -1,7 +1,7 @@
 """IM统一数据模型 - 跨渠道抽象"""
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field
 

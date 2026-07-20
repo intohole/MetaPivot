@@ -12,9 +12,6 @@
 - 与 Agent 消息处理器并行（IM 消息可同时触发 Agent + Workflow）
 - 异常隔离：任何 workflow 触发失败只记日志，不影响消息派发主链路
 """
-import asyncio
-from typing import Optional
-
 from sqlalchemy import select
 
 from app.domain.channel.models import UnifiedMessage

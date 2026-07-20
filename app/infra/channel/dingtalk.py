@@ -1,5 +1,5 @@
 """钉钉适配器 - Stream模式(WebSocket长连接)"""
-from typing import Any, Optional
+from typing import Any
 
 from app.domain.channel.adapter import ChannelAdapter
 from app.domain.channel.models import (

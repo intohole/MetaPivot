@@ -6,7 +6,7 @@
 - 函数签名：async def fn(args: dict) -> dict
 """
 import importlib
-from typing import Any, Callable, Optional
+from typing import Callable
 
 from app.utils.logger import get_logger
 
@@ -41,7 +41,7 @@ def load_function(source_ref: str) -> Callable:
     except ImportError as e:
         log.error("Module not found: {} - {}", module_path, e)
         raise
-    except AttributeError as e:
+    except AttributeError:
         log.error("Function not found: {} in {}", fn_name, module_path)
         raise
 

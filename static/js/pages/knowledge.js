@@ -7,12 +7,14 @@
     name: 'KnowledgePage',
     setup() {
       const state = window.AppState
-      const list = ref([])
-      const total = ref(0)
-      const page = ref(1)
-      const pageSize = ref(20)
       const statusFilter = ref('')
-      const loading = ref(false)
+
+      // useListPage 统一分页加载/翻页（消除重复样板）；status 走 extraParams
+      const lp = window.useListPage('/knowledge/documents', {
+        failMsg: '加载文档列表失败', withKeyword: false,
+        extraParams: () => ({ status: statusFilter.value })
+      })
+      const { list, total, page, pageSize, loading, loadList, onPageChange, onSearch } = lp
 
       const showUpload = ref(false)
       const uploadFile = ref(null)
@@ -31,17 +33,6 @@
         { key: 'created_at', label: '上传时间', width: '160px' },
         { key: 'actions', label: '操作', width: '100px', align: 'center' }
       ]
-
-      const loadList = async () => {
-        loading.value = true
-        try {
-          const res = await window.API.get('/knowledge/documents', {
-            page: page.value, page_size: pageSize.value, status: statusFilter.value
-          })
-          list.value = res.items || []
-          total.value = res.total || 0
-        } finally { loading.value = false }
-      }
 
       const onFileChange = (e) => {
         const f = e.target.files[0]
@@ -97,18 +88,15 @@
         }
       }
 
-      const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }
-      const onSearch = () => { page.value = 1; loadList() }
-
       onMounted(() => {
         loadList()
-        if (state.pendingAction === 'create-knowledge') {
-          state.pendingAction = ''
+        if (state.pendingAction.value === 'create-knowledge') {
+          state.pendingAction.value = ''
           nextTick(() => { showUpload.value = true })
         }
-        if (state.pendingQuery) {
-          const q = state.pendingQuery
-          state.pendingQuery = ''
+        if (state.pendingQuery.value) {
+          const q = state.pendingQuery.value
+          state.pendingQuery.value = ''
           nextTick(() => {
             showSearch.value = true
             searchQuery.value = q

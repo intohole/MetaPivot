@@ -3,18 +3,16 @@
  * DLQ 条目：retry_count >= max_retries 的 failed 任务
  */
 (function () {
-  const { ref, onMounted, computed } = Vue
+  const { onMounted, computed } = Vue
   window.Pages = window.Pages || {}
 
   window.Pages.Dlq = {
     name: 'DlqPage',
     setup() {
       const state = window.AppState
-      const list = ref([])
-      const total = ref(0)
-      const page = ref(1)
-      const pageSize = ref(20)
-      const loading = ref(false)
+      // useListPage 统一分页加载/翻页（消除重复样板）
+      const lp = window.useListPage('/schedules/dlq', { failMsg: '加载死信队列失败', withKeyword: false })
+      const { list, total, page, pageSize, loading, loadList, onPageChange } = lp
 
       const columns = computed(() => [
         { key: 'id', label: 'ID', width: '60px' },
@@ -24,17 +22,6 @@
         { key: 'last_run_at', label: '最后执行', width: '150px' },
         { key: 'actions', label: '操作', width: '140px', align: 'center' }
       ])
-
-      const loadList = async () => {
-        loading.value = true
-        try {
-          const res = await window.API.get('/schedules/dlq', { page: page.value, page_size: pageSize.value })
-          list.value = res.items || []
-          total.value = res.total || 0
-        } catch (e) {
-          state.notify('加载死信队列失败：' + (e.message || ''), 'error')
-        } finally { loading.value = false }
-      }
 
       const retryTask = async (row) => {
         const act = await state.confirmAction({
@@ -63,8 +50,7 @@
         } catch (e) { state.notify('操作失败：' + (e.message || ''), 'error') }
       }
 
-      const onPageChange = ({ page: p }) => { page.value = p; loadList() }
-      const fmtTime = (t) => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '-'
+      const fmtTime = window.Format.time
       const goSchedules = () => state.navigate('/schedules')
 
       onMounted(() => loadList())
@@ -114,7 +100,7 @@
             </template>
           </base-table>
           <div v-if="total > pageSize" class="mt-4 flex justify-center">
-            <pagination :current="page" :total="total" :page-size="pageSize" @change="onPageChange" />
+            <pagination :page="page" :total="total" :page-size="pageSize" @change="onPageChange" />
           </div>
         </base-card>
       </div>

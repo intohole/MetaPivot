@@ -1,9 +1,9 @@
 """工作流路由 - 创建、查询、执行、状态"""
 from __future__ import annotations
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
-from app.route.depend import ok, paginate
+from app.route.depend import ok, page_params, paginate, PaginationParams
 from app.service.auth_service import CurrentUser, require_permission
 
 router = APIRouter()
@@ -57,15 +57,14 @@ class TemplateInstantiateRequest(BaseModel):
 @router.get("/templates", summary="模板列表")
 async def list_templates(
     request: Request,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    pg: PaginationParams = Depends(page_params),
     category: str = "",
     keyword: str = "",
     user: CurrentUser = Depends(require_permission("workflow:read")),
 ):
     from app.service.template_service import template_service
-    items, total = await template_service.list_templates(page, page_size, category, keyword)
-    return ok(paginate([_template_dict(t) for t in items], total, page, page_size), request)
+    items, total = await template_service.list_templates(pg.page, pg.page_size, category, keyword)
+    return ok(paginate([_template_dict(t) for t in items], total, pg.page, pg.page_size), request)
 
 
 @router.get("/templates/{template_id}", summary="模板详情")
@@ -129,15 +128,14 @@ async def create_workflow(
 @router.get("", summary="工作流列表")
 async def list_workflows(
     request: Request,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    pg: PaginationParams = Depends(page_params),
     enabled: bool | None = None,
     keyword: str = "",
     user: CurrentUser = Depends(require_permission("workflow:read")),
 ):
     from app.service.workflow_service import workflow_service
-    items, total = await workflow_service.list_workflows(page, page_size, enabled, keyword)
-    return ok(paginate([_workflow_dict(w) for w in items], total, page, page_size), request)
+    items, total = await workflow_service.list_workflows(pg.page, pg.page_size, enabled, keyword)
+    return ok(paginate([_workflow_dict(w) for w in items], total, pg.page, pg.page_size), request)
 
 
 @router.get("/{workflow_id}", summary="工作流详情")

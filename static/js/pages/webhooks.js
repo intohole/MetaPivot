@@ -115,8 +115,8 @@
 
       onMounted(() => {
         loadList()
-        if (state.pendingAction === 'create-webhook') {
-          state.pendingAction = ''
+        if (state.pendingAction.value === 'create-webhook') {
+          state.pendingAction.value = ''
           nextTick(() => openCreate())
         }
       })

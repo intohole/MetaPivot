@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 
-from app.route.depend import ok, paginate
+from app.route.depend import ok, page_params, paginate, PaginationParams
 from app.service.auth_service import CurrentUser, require_permission
 
 router = APIRouter()
@@ -56,8 +56,7 @@ async def create_skill(
 @router.get("", summary="Skill 列表")
 async def list_skills(
     request: Request,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    pg: PaginationParams = Depends(page_params),
     enabled: bool | None = None,
     source_type: str | None = None,
     keyword: str = "",
@@ -66,10 +65,10 @@ async def list_skills(
 ):
     from app.service.skill_service import skill_service
     items, total = await skill_service.list_skills(
-        page, page_size, enabled, source_type, keyword,
+        pg.page, pg.page_size, enabled, source_type, keyword,
         owner_id=user.user_id, scope=scope,
     )
-    return ok(paginate([_skill_dict(s) for s in items], total, page, page_size), request)
+    return ok(paginate([_skill_dict(s) for s in items], total, pg.page, pg.page_size), request)
 
 
 @router.post("/from-workflow/{workflow_id}", status_code=201, summary="从 Workflow 创建 Skill")

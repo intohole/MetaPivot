@@ -2,11 +2,11 @@
 
 P2 阶段先骨架化，待 AgentService 完成后填充实现。
 """
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from app.route.depend import ok, paginate
+from app.route.depend import ok, page_params, paginate, PaginationParams
 from app.service.auth_service import CurrentUser, get_current_user
 
 router = APIRouter()
@@ -59,16 +59,15 @@ async def chat(
 @router.get("/tasks", summary="任务列表")
 async def list_tasks(
     request: Request,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    pg: PaginationParams = Depends(page_params),
     status: str = "",
     user: CurrentUser = Depends(get_current_user),
 ):
     """查询 Agent 任务列表（admin 可查所有，普通用户仅查自己的）"""
     from app.service.agent_service import agent_service
     caller_uid = "" if user.role == "admin" else user.user_id
-    items, total = await agent_service.list_tasks(page, page_size, caller_uid, status)
-    return ok(paginate(items, total, page, page_size), request)
+    items, total = await agent_service.list_tasks(pg.page, pg.page_size, caller_uid, status)
+    return ok(paginate(items, total, pg.page, pg.page_size), request)
 
 
 @router.get("/tasks/{task_id}", summary="查询任务状态")

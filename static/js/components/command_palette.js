@@ -51,11 +51,11 @@
         const origQ = query.value.trim()
         return [{ label: '自然语言命令', items: [
           { id: '_nl-agent', label: '发送给 Agent：' + origQ, icon: '🤖',
-            action: () => { state.pendingMessage = origQ; state.navigate('/agent') } },
+            action: () => { state.pendingMessage.value = origQ; state.navigate('/agent') } },
           { id: '_nl-knowledge', label: '搜索知识库：' + origQ, icon: '📚',
-            action: () => { state.pendingQuery = origQ; state.navigate('/knowledge') } },
+            action: () => { state.pendingQuery.value = origQ; state.navigate('/knowledge') } },
           { id: '_nl-skill', label: '查找 Skill：' + origQ, icon: '🧩',
-            action: () => { state.pendingAction = 'search-skill:' + origQ; state.navigate('/skills') } }
+            action: () => { state.pendingAction.value = 'search-skill:' + origQ; state.navigate('/skills') } }
         ]}]
       })
 

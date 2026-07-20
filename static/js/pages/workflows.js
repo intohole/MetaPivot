@@ -7,12 +7,6 @@
     name: 'WorkflowsPage',
     setup() {
       const state = window.AppState
-      const list = ref([])
-      const total = ref(0)
-      const page = ref(1)
-      const pageSize = ref(20)
-      const keyword = ref('')
-      const loading = ref(false)
 
       const showForm = ref(false)
       const editingId = ref('')
@@ -35,6 +29,13 @@
       const selectedKeys = ref([])
       const bulkLoading = ref(false)
 
+      // useListPage 统一分页加载/搜索/翻页（消除重复样板）；翻页时清空批量选择
+      const lp = window.useListPage('/workflows', {
+        failMsg: '加载工作流列表失败',
+        onPageChange: () => { selectedKeys.value = [] }
+      })
+      const { list, total, page, pageSize, keyword, loading, loadList, onPageChange, onSearch } = lp
+
       const isAdmin = computed(() => state.hasRole('admin'))
 
       const columns = computed(() => {
@@ -48,17 +49,6 @@
         cols.push({ key: 'actions', label: '操作', width: '220px', align: 'center' })
         return cols
       })
-
-      const loadList = async () => {
-        loading.value = true
-        try {
-          const res = await window.API.get('/workflows', { page: page.value, page_size: pageSize.value, keyword: keyword.value })
-          list.value = res.items || []
-          total.value = res.total || 0
-        } catch (e) {
-          state.notify('加载工作流列表失败：' + (e.message || '未知错误'), 'error')
-        } finally { loading.value = false }
-      }
 
       const initEditor = (definition) => {
         nextTick(() => {
@@ -256,18 +246,12 @@
       const bulkDisable = () => bulkAction('disable', '禁用')
       const bulkDelete = () => bulkAction('delete', '删除')
 
-      const onPageChange = ({ page: p, pageSize: ps }) => {
-        page.value = p; if (ps) pageSize.value = ps
-        selectedKeys.value = [] // 翻页清空选择
-        loadList()
-      }
-      const onSearch = () => { page.value = 1; loadList() }
       const goTemplates = () => state.navigate('/templates')
 
       onMounted(() => {
         loadList()
-        if (state.pendingAction === 'create-workflow') {
-          state.pendingAction = ''
+        if (state.pendingAction.value === 'create-workflow') {
+          state.pendingAction.value = ''
           nextTick(() => openCreate())
         }
       })

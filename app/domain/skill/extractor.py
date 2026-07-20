@@ -10,7 +10,6 @@ LLM 调用复用 LLMProvider.chat_completion(response_format={type: json_object}
   本模块位于 Domain 层，通过延迟 import 调用 Infra 层（LLM Provider）+ Data 层（ORM）。
 """
 import json
-from typing import Optional
 
 from sqlalchemy import select
 

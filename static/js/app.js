@@ -37,33 +37,33 @@
       {
         id: 'action-agent-task', label: '发起 Agent 任务', icon: '🤖', keywords: 'agent task 对话 发起 ask', group: 'actions',
         inputPrompt: '输入 Agent 任务消息...',
-        action: (msg) => { window.AppState.pendingMessage = msg; window.AppState.navigate('/agent') }
+        action: (msg) => { window.AppState.pendingMessage.value = msg; window.AppState.navigate('/agent') }
       },
       {
         id: 'action-create-skill', label: '新建 Skill', icon: '🧩', keywords: 'create skill 新建 创建 技能', group: 'actions',
-        action: () => { window.AppState.pendingAction = 'create-skill'; window.AppState.navigate('/skills') }
+        action: () => { window.AppState.pendingAction.value = 'create-skill'; window.AppState.navigate('/skills') }
       },
       {
         id: 'action-create-workflow', label: '新建工作流', icon: '⚡', keywords: 'create workflow 新建 创建 工作流', group: 'actions',
-        action: () => { window.AppState.pendingAction = 'create-workflow'; window.AppState.navigate('/workflows') }
+        action: () => { window.AppState.pendingAction.value = 'create-workflow'; window.AppState.navigate('/workflows') }
       },
       {
         id: 'action-create-knowledge', label: '上传知识文档', icon: '📚', keywords: 'create knowledge upload 上传 知识 文档', group: 'actions',
-        action: () => { window.AppState.pendingAction = 'create-knowledge'; window.AppState.navigate('/knowledge') }
+        action: () => { window.AppState.pendingAction.value = 'create-knowledge'; window.AppState.navigate('/knowledge') }
       },
       {
         id: 'action-query-knowledge', label: '查询知识库', icon: '🔍', keywords: 'search knowledge query 查询 检索 知识', group: 'actions',
         inputPrompt: '输入知识查询关键词...',
-        action: (q) => { window.AppState.pendingQuery = q; window.AppState.navigate('/knowledge') }
+        action: (q) => { window.AppState.pendingQuery.value = q; window.AppState.navigate('/knowledge') }
       },
       {
         id: 'action-create-webhook', label: '新建 Webhook', icon: '🔗', keywords: 'create webhook 新建 触发器', group: 'actions',
-        action: () => { window.AppState.pendingAction = 'create-webhook'; window.AppState.navigate('/webhooks') }
+        action: () => { window.AppState.pendingAction.value = 'create-webhook'; window.AppState.navigate('/webhooks') }
       },
       {
         id: 'action-save-last-task-as-skill', label: '保存最近任务为 Skill', icon: '💾',
         keywords: 'save skill task 录制 沉淀', group: 'actions',
-        action: () => { window.AppState.pendingAction = 'save-last-task-as-skill'; window.AppState.navigate('/agent') }
+        action: () => { window.AppState.pendingAction.value = 'save-last-task-as-skill'; window.AppState.navigate('/agent') }
       },
       {
         id: 'action-skill-review', label: 'Skill 自进化 Review', icon: '📝',

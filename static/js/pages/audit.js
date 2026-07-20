@@ -7,12 +7,14 @@
     name: 'AuditPage',
     setup() {
       const state = window.AppState
-      const list = ref([])
-      const total = ref(0)
-      const page = ref(1)
-      const pageSize = ref(20)
       const filters = reactive({ user_id: '', action: '', skill_id: '', start_time: '', end_time: '' })
-      const loading = ref(false)
+
+      // useListPage 统一分页加载/翻页（消除重复样板）；filters 走 extraParams
+      const lp = window.useListPage('/audit/logs', {
+        failMsg: '加载审计日志失败', withKeyword: false,
+        extraParams: () => ({ ...filters })
+      })
+      const { list, total, page, pageSize, loading, loadList, onPageChange, onSearch } = lp
 
       const stats = ref([])
       const statsGroupBy = ref('day')
@@ -28,18 +30,6 @@
         { key: 'output_summary', label: '摘要' }
       ]
 
-      const loadList = async () => {
-        loading.value = true
-        try {
-          const res = await window.API.get('/audit/logs', {
-            page: page.value, page_size: pageSize.value,
-            ...filters
-          })
-          list.value = res.items || []
-          total.value = res.total || 0
-        } finally { loading.value = false }
-      }
-
       const loadStats = async () => {
         try {
           const res = await window.API.get('/audit/stats', { group_by: statsGroupBy.value })
@@ -52,8 +42,6 @@
 
       const maxCount = computed(() => Math.max(...stats.value.map(s => s.count), 1))
 
-      const onPageChange = ({ page: p, pageSize: ps }) => { page.value = p; if (ps) pageSize.value = ps; loadList() }
-      const onSearch = () => { page.value = 1; loadList() }
       const onGroupChange = () => loadStats()
 
       const resetFilters = () => {

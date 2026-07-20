@@ -15,7 +15,6 @@
 架构：Domain 层，延迟 import Infra/Service 避免循环依赖。
 """
 import json
-from typing import Optional
 
 from sqlalchemy import select
 
@@ -140,7 +139,7 @@ def _build_failure_trace(task: AgentTaskORM, steps: list) -> str:
     """构造失败轨迹摘要（突出失败点）"""
     lines = [
         f"用户消息：{task.original_message or '(空)'}",
-        f"任务状态：FAILED",
+        "任务状态：FAILED",
         f"错误信息：{(task.error or {}).get('message', 'unknown') if task.error else 'unknown'}",
         "",
         "执行轨迹：",

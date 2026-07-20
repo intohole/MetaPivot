@@ -89,7 +89,7 @@
       AppState.notify(`✅ Skill "${skill.name}" 执行完成`, 'success')
     }
     // 将结果作为 Agent 消息展示（复用 Agent 页面的对话流）
-    AppState.pendingMessage = `/skill ${skill.name} 执行结果：\n${preview}`
+    AppState.pendingMessage.value = `/skill ${skill.name} 执行结果：\n${preview}`
     AppState.navigate('/agent')
   }
 

@@ -10,9 +10,9 @@ DLQ 设计：
 - 若 retry_count >= max_retries（默认 3），状态变为 failed，进入 DLQ
 - DLQ 任务可通过 retry 接口手动重新入队，或 cancel 放弃
 """
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Request
 
-from app.route.depend import ok
+from app.route.depend import ok, page_params, PaginationParams
 from app.service.auth_service import CurrentUser, get_current_user
 from app.utils.response import AppError, ErrorCode
 
@@ -22,8 +22,7 @@ router = APIRouter()
 @router.get("", summary="查询死信任务列表")
 async def list_dlq(
     request: Request,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
+    pg: PaginationParams = Depends(page_params),
     user: CurrentUser = Depends(get_current_user),
 ):
     """查询失败任务列表（DLQ）
@@ -34,7 +33,7 @@ async def list_dlq(
     from app.infra.scheduler.factory import get_scheduler
     scheduler = await get_scheduler()
     result = await scheduler.list_dlq(
-        user_id=user.user_id, page=page, page_size=page_size,
+        user_id=user.user_id, page=pg.page, page_size=pg.page_size,
     )
     return ok(result, request)
 

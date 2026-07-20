@@ -8,6 +8,7 @@
 
 Sprint 8.1: DAG 推进逻辑已抽离到 workflow_runner.py（保持本文件 ≤ 300 行）。
 """
+import asyncio
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -25,7 +26,7 @@ class WorkflowService:
     """工作流服务单例"""
 
     # 运行中执行任务引用（避免被GC）
-    _running_tasks: dict[str, "asyncio.Task"] = {}
+    _running_tasks: dict[str, asyncio.Task] = {}
 
     # ============ CRUD ============
 

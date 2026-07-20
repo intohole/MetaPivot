@@ -92,7 +92,6 @@ def _build_langfuse_exporter():
 
 def get_tracer() -> Any:
     """获取 tracer 实例（懒初始化，未 init 时返回 NoopTracer）"""
-    global _tracer
     if _tracer is None:
         return NoopTracer()
     return _tracer

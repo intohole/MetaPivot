@@ -14,7 +14,6 @@ try:
     import lark_oapi as lark  # type: ignore
     from lark_oapi.api.im.v1 import (  # type: ignore
         CreateMessageRequest, CreateMessageRequestBody,
-        P2ImMessageReceiveV1,
     )
     FEISHU_AVAILABLE = True
 except ImportError:

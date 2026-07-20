@@ -20,7 +20,7 @@ from typing import Optional
 
 from sqlalchemy import select
 
-from app.domain.webhook.models import Webhook, WebhookTargetType
+from app.domain.webhook.models import WebhookTargetType
 from app.infra.db.models_webhook import WebhookORM
 from app.infra.db.session import get_db_session
 from app.utils.logger import get_logger

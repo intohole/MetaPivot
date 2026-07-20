@@ -7,14 +7,8 @@
     name: 'SkillsPage',
     setup() {
       const state = window.AppState
-      const list = ref([])
-      const total = ref(0)
-      const page = ref(1)
-      const pageSize = ref(20)
-      const keyword = ref('')
       const sourceType = ref('')
       const scope = ref('all')
-      const loading = ref(false)
 
       const showForm = ref(false)
       const editingId = ref('')
@@ -38,6 +32,14 @@
       const selectedKeys = ref([])
       const bulkLoading = ref(false)
 
+      // useListPage 统一分页加载/搜索/翻页（消除重复样板）；翻页时清空批量选择
+      const lp = window.useListPage('/skills', {
+        failMsg: '加载 Skill 列表失败',
+        extraParams: () => ({ source_type: sourceType.value, scope: scope.value }),
+        onPageChange: () => { selectedKeys.value = [] }
+      })
+      const { list, total, page, pageSize, keyword, loading, loadList, onPageChange, onSearch } = lp
+
       const isAdmin = computed(() => state.hasRole('admin'))
 
       const columns = computed(() => {
@@ -52,20 +54,6 @@
         if (isAdmin.value) cols.push({ key: 'actions', label: '操作', width: '260px', align: 'center' })
         return cols
       })
-
-      const loadList = async () => {
-        loading.value = true
-        try {
-          const res = await window.API.get('/skills', {
-            page: page.value, page_size: pageSize.value,
-            keyword: keyword.value, source_type: sourceType.value, scope: scope.value
-          })
-          list.value = res.items || []
-          total.value = res.total || 0
-        } finally {
-          loading.value = false
-        }
-      }
 
       const openCreate = () => {
         Object.assign(form, { name: '', description: '', input_schema: '{}', source_type: 'mcp', source_ref: '', permission: 'user', require_confirm: false, tags: '' })
@@ -250,23 +238,16 @@
       const bulkDisable = () => bulkAction('disable', '禁用')
       const bulkDelete = () => bulkAction('delete', '删除')
 
-      const onPageChange = ({ page: p, pageSize: ps }) => {
-        page.value = p; if (ps) pageSize.value = ps
-        selectedKeys.value = [] // 翻页清空选择
-        loadList()
-      }
-      const onSearch = () => { page.value = 1; loadList() }
-
       onMounted(() => {
         loadList()
-        if (state.pendingAction === 'create-skill') {
-          state.pendingAction = ''
+        if (state.pendingAction.value === 'create-skill') {
+          state.pendingAction.value = ''
           nextTick(() => openCreate())
         }
         // NL 中枢：search-skill: 前缀触发搜索
-        if (typeof state.pendingAction === 'string' && state.pendingAction.startsWith('search-skill:')) {
-          keyword.value = state.pendingAction.slice('search-skill:'.length)
-          state.pendingAction = ''
+        if (state.pendingAction.value.startsWith('search-skill:')) {
+          keyword.value = state.pendingAction.value.slice('search-skill:'.length)
+          state.pendingAction.value = ''
           onSearch()
         }
       })

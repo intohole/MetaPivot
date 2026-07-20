@@ -16,11 +16,14 @@
     name: 'TemplatesPage',
     setup() {
       const state = window.AppState
-      const list = ref([])
-      const total = ref(0)
-      const loading = ref(false)
-      const keyword = ref('')
       const activeCategory = ref('')
+
+      // useListPage 统一加载/搜索（Gallery 模式：单页 100 条，无分页 UI）
+      const lp = window.useListPage('/workflows/templates', {
+        failMsg: '加载模板列表失败', pageSize: 100,
+        extraParams: () => activeCategory.value ? { category: activeCategory.value } : {}
+      })
+      const { list, total, loading, keyword, loadList, onSearch } = lp
 
       const showInstantiate = ref(false)
       const currentTpl = ref(null)
@@ -34,20 +37,6 @@
 
       const isAdmin = computed(() => state.hasRole('admin'))
 
-      const loadList = async () => {
-        loading.value = true
-        try {
-          const params = { page: 1, page_size: 100, keyword: keyword.value }
-          if (activeCategory.value) params.category = activeCategory.value
-          const res = await window.API.get('/workflows/templates', params)
-          list.value = res.items || []
-          total.value = res.total || 0
-        } catch (e) {
-          state.notify('加载模板列表失败：' + (e.message || '未知错误'), 'error')
-        } finally { loading.value = false }
-      }
-
-      const onSearch = () => { loadList() }
       const selectCategory = (cat) => { activeCategory.value = activeCategory.value === cat ? '' : cat; loadList() }
 
       const openInstantiate = (tpl) => {

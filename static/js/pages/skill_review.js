@@ -6,7 +6,7 @@
    3. 健康度视图：按失败率标记 healthy/degraded/critical
 */
 (function () {
-  const { ref, reactive, onMounted, computed } = Vue
+  const { ref, onMounted, computed } = Vue
   window.Pages = window.Pages || {}
 
   window.Pages.SkillReview = {
@@ -14,15 +14,17 @@
     setup() {
       const state = window.AppState
       const tab = ref('drafts') // drafts | revisions
-      const loading = ref(false)
-      const list = ref([])
-      const total = ref(0)
-      const page = ref(1)
-      const pageSize = ref(20)
       const statusFilter = ref('pending')
       const showDetail = ref(false)
       const detailItem = ref(null)
       const detailType = ref('draft') // draft | revision
+
+      // useListPage 统一分页加载/翻页；path 随 tab 动态切换，status 走 extraParams
+      const lp = window.useListPage(
+        () => tab.value === 'drafts' ? '/skills/drafts/list' : '/skills/revisions/list',
+        { failMsg: '加载失败', withKeyword: false, extraParams: () => ({ status: statusFilter.value }) }
+      )
+      const { list, total, page, pageSize, loading, loadList, onPageChange } = lp
 
       const isAdmin = computed(() => state.hasRole('admin') || state.hasRole('manager'))
 
@@ -43,22 +45,8 @@
         { key: 'actions', label: '操作', width: '160px', align: 'center' }
       ]
 
-      const loadList = async () => {
-        loading.value = true
-        try {
-          const path = tab.value === 'drafts' ? '/skills/drafts/list' : '/skills/revisions/list'
-          const params = { page: page.value, page_size: pageSize.value, status: statusFilter.value }
-          const res = await window.API.get(path, params)
-          list.value = res.items || []
-          total.value = res.total || 0
-        } catch (e) {
-          state.notify('加载失败：' + (e.message || ''), 'error')
-        } finally { loading.value = false }
-      }
-
       const onTabChange = (t) => { tab.value = t; page.value = 1; statusFilter.value = 'pending'; loadList() }
       const onStatusChange = (s) => { statusFilter.value = s; page.value = 1; loadList() }
-      const onPageChange = ({ page: p }) => { page.value = p; loadList() }
 
       const viewDetail = (row) => {
         detailItem.value = row
@@ -106,7 +94,7 @@
       }[s] || 'badge-muted')
       const statusLabel = (s) => ({ pending: '待审核', approved: '已批准', rejected: '已拒绝', auto_merged: '自动合并' }[s] || s)
       const confColor = (c) => c >= 0.8 ? 'text-success' : c >= 0.5 ? 'text-warning' : 'text-ink-muted'
-      const fmtTime = (t) => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '-'
+      const fmtTime = window.Format.time
       const goSkills = () => state.navigate('/skills')
 
       onMounted(() => loadList())

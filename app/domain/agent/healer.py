@@ -12,9 +12,7 @@ OODA 循环：
 - 成功后 _prune_failed_history 清理失败历史（防上下文污染）
 """
 import asyncio
-import json
 import re
-from datetime import datetime
 from typing import Any, Optional
 
 from app.domain.agent.state import AgentState, StepRecord
@@ -181,7 +179,6 @@ class Healer:
 
         # 用替代工具执行（保留原参数，可能不完全匹配但让 LLM 后续纠正）
         from app.domain.agent.executor import execute_tool_call
-        started = datetime.now()
         try:
             # 构造伪 tool_call（保留原 arguments）
             fallback_tc = _build_fallback_tc(tc, fallback_name)

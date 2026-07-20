@@ -21,7 +21,6 @@
 import hashlib
 import json
 from typing import Any, Optional
-from uuid import uuid4
 
 from app.infra.memory.db_memory import DBMemoryStore
 from app.utils.config import settings

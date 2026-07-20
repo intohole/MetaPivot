@@ -12,7 +12,7 @@
 import json
 from typing import Any, Optional
 
-from app.domain.contracts.verifier import IVerifier, VerifyDecision, VerifyResult
+from app.domain.contracts.verifier import VerifyDecision, VerifyResult
 from app.utils.llm_structured import llm_json_call
 from app.utils.logger import get_logger
 

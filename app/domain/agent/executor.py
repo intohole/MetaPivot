@@ -115,7 +115,7 @@ async def execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
     # Phase 2 Bundle B: workflow 内置工具（trigger_workflow / list_workflows）
     # 不经过 skill_service，避免污染业务工具；配合 cycle_detector 防循环死锁
     if tool_name == "trigger_workflow":
-        from app.domain.workflow.cycle_detector import should_block, push_id, describe_stack
+        from app.domain.workflow.cycle_detector import should_block, push_id
         from app.service.workflow_service import workflow_service
         workflow_id = args.get("workflow_id", "")
         inputs = args.get("inputs", {})
