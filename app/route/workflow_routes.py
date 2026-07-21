@@ -134,7 +134,7 @@ async def list_workflows(
     user: CurrentUser = Depends(require_permission("workflow:read")),
 ):
     from app.service.workflow_service import workflow_service
-    items, total = await workflow_service.list_workflows(pg.page, pg.page_size, enabled, keyword)
+    items, total = await workflow_service.list_workflows(pg.page, pg.page_size, enabled, keyword, user.tenant_id)
     return ok(paginate([_workflow_dict(w) for w in items], total, pg.page, pg.page_size), request)
 
 

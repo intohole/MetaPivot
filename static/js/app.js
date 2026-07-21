@@ -3,7 +3,7 @@
    页面组件在各自文件中注册到 window.Pages，本文件最后加载
    与管理端 static/js/admin_app.js 区别：
    - 包含 /login 登录页（管理端无登录页，登录后按角色分流）
-   - 精简路由：工作台 / Agent / 知识库 / 工作流 / 模板 / Skill / IM 绑定 / 定时任务
+   - 精简路由：工作台 / Agent / 知识库 / 工作流 / 模板 / Skill / IM 绑定
    - 无治理类路由（用户管理 / 审计 / 系统配置 / DLQ / Webhook / Skill Review）
    ============================================================ */
 (function () {
@@ -19,8 +19,7 @@
       { id: 'nav-workflows', label: '工作流', icon: '⚡', path: '/workflows', keywords: 'workflow 工作流 flow', group: 'navigation', shortcut: 'g w' },
       { id: 'nav-templates', label: '模板库', icon: '🗂️', path: '/templates', keywords: 'template 模板 sop', group: 'navigation', shortcut: 'g t' },
       { id: 'nav-knowledge', label: '知识库', icon: '📚', path: '/knowledge', keywords: 'knowledge 知识 文档', group: 'navigation', shortcut: 'g k' },
-      { id: 'nav-channels', label: 'IM 绑定', icon: '💬', path: '/channels', keywords: 'channel 渠道 钉钉 企微 飞书 绑定', group: 'navigation', shortcut: 'g c' },
-      { id: 'nav-schedules', label: '定时任务', icon: '⏰', path: '/schedules', keywords: 'schedule 定时 cron 任务', group: 'navigation', shortcut: 'g t' }
+      { id: 'nav-channels', label: 'IM 绑定', icon: '💬', path: '/channels', keywords: 'channel 渠道 钉钉 企微 飞书 绑定', group: 'navigation', shortcut: 'g c' }
     ]
     navCmds.forEach(c => window.Commands.register(c))
     window.Commands.register({
@@ -76,8 +75,7 @@
     { path: '/workflows', label: '工作流', component: 'WorkflowsPage', icon: '⚡' },
     { path: '/templates', label: '模板库', component: 'TemplatesPage', icon: '🗂️' },
     { path: '/knowledge', label: '知识库', component: 'KnowledgePage', icon: '📚' },
-    { path: '/channels', label: 'IM 绑定', component: 'ChannelsPage', icon: '💬' },
-    { path: '/schedules', label: '定时任务', component: 'SchedulesPage', icon: '⏰' }
+    { path: '/channels', label: 'IM 绑定', component: 'ChannelsPage', icon: '💬' }
   ]
 
   const currentRoute = computed(() => {
@@ -96,7 +94,7 @@
   /* === 侧边栏分组（客户端视角：工作台 / 自动化 / 我的）=== */
   const NAV_GROUPS = [
     { label: '工作台', paths: ['/dashboard', '/agent', '/knowledge'] },
-    { label: '自动化', paths: ['/workflows', '/skills', '/templates', '/schedules'] },
+    { label: '自动化', paths: ['/workflows', '/skills', '/templates'] },
     { label: '我的', paths: ['/channels'] }
   ]
   const navGroups = computed(() => NAV_GROUPS.map(g => ({
@@ -268,7 +266,7 @@
   const pageMap = {
     'LoginPage': P.Login, 'DashboardPage': P.Dashboard, 'AgentPage': P.Agent,
     'SkillsPage': P.Skills, 'WorkflowsPage': P.Workflows, 'TemplatesPage': P.Templates,
-    'KnowledgePage': P.Knowledge, 'ChannelsPage': P.Channels, 'SchedulesPage': P.Schedules
+    'KnowledgePage': P.Knowledge, 'ChannelsPage': P.Channels
   }
   for (const [name, def] of Object.entries(pageMap)) {
     app.component(name, def || { template: '<div class="p-6 text-ink-muted">页面加载失败：' + name + '</div>' })

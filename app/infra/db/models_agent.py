@@ -30,6 +30,8 @@ class AgentTaskORM(Base):
     intent: Mapped[Optional[str]] = mapped_column(String(64))
     mode: Mapped[str] = mapped_column(String(20), default="agent")
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)
+    # 多租户隔离字段（默认 'default' 租户，Agent 任务按租户隔离）
+    tenant_id: Mapped[str] = mapped_column(String(36), default="default", nullable=False, index=True)
     plan: Mapped[Optional[dict]] = mapped_column(JSON)
     current_step: Mapped[int] = mapped_column(Integer, default=0)
     result: Mapped[Optional[dict]] = mapped_column(JSON)

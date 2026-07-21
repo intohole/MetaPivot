@@ -27,7 +27,7 @@ async def list_documents(
     user: CurrentUser = Depends(require_permission("knowledge:read")),
 ):
     from app.service.knowledge_service import knowledge_service
-    items, total = await knowledge_service.list_documents(pg.page, pg.page_size, status)
+    items, total = await knowledge_service.list_documents(pg.page, pg.page_size, status, user.tenant_id)
     return ok(paginate(items, total, pg.page, pg.page_size), request)
 
 

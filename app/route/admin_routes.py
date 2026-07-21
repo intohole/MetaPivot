@@ -24,7 +24,7 @@ router = APIRouter()
 class UserCreateRequest(BaseModel):
     username: str = Field(..., description="用户名")
     password: str = Field(..., min_length=6, description="密码")
-    role: str = Field(default="user", description="角色 user/manager/admin")
+    role: str = Field(default="user", description="角色 user/tenant_manager/tenant_admin")
     im_accounts: dict = Field(default_factory=dict, description="IM 账号绑定")
 
 
@@ -121,3 +121,58 @@ async def update_config(
 ):
     from app.service.config_service import config_service
     return ok(await config_service.update_config(key, body["value"]), request)
+
+
+# ============ 企业管理概览 ============
+
+@router.get("/overview", summary="企业管理概览（管理端仪表盘用）")
+async def tenant_overview(
+    request: Request,
+    user: CurrentUser = Depends(require_permission("audit:read")),
+):
+    """返回当前租户的管理概览数据：用户数/活跃用户/Skill/工作流/定时任务/Agent任务/今日调用
+
+    仅管理端（tenant_admin/tenant_manager）可访问，按 tenant_id 隔离。
+    """
+    from sqlalchemy import select, func
+    from app.infra.db.session import get_db_session
+    from app.infra.db.models_user_skill import UserORM, SkillORM
+    from app.infra.db.models_core import WorkflowORM, AuditLogORM, ScheduledTaskORM
+    from app.infra.db.models_agent import AgentTaskORM
+    from datetime import datetime, date
+
+    tid = user.tenant_id
+    today_start = datetime.combine(date.today(), datetime.min.time())
+
+    async with get_db_session() as session:
+        user_count = await session.scalar(
+            select(func.count()).select_from(UserORM).where(UserORM.tenant_id == tid))
+        active_users = await session.scalar(
+            select(func.count()).select_from(UserORM).where(
+                UserORM.tenant_id == tid, UserORM.status == "active"))
+        skill_count = await session.scalar(
+            select(func.count()).select_from(SkillORM).where(
+                SkillORM.tenant_id == tid, SkillORM.enabled.is_(True)))
+        workflow_count = await session.scalar(
+            select(func.count()).select_from(WorkflowORM).where(
+                WorkflowORM.tenant_id == tid, WorkflowORM.enabled.is_(True)))
+        schedule_count = await session.scalar(
+            select(func.count()).select_from(ScheduledTaskORM).where(
+                ScheduledTaskORM.tenant_id == tid))
+        agent_task_count = await session.scalar(
+            select(func.count()).select_from(AgentTaskORM).where(
+                AgentTaskORM.tenant_id == tid))
+        today_calls = await session.scalar(
+            select(func.count()).select_from(AuditLogORM).where(
+                AuditLogORM.tenant_id == tid, AuditLogORM.created_at >= today_start))
+
+    return ok({
+        "user_count": user_count or 0,
+        "active_users": active_users or 0,
+        "skill_count": skill_count or 0,
+        "workflow_count": workflow_count or 0,
+        "schedule_count": schedule_count or 0,
+        "agent_task_count": agent_task_count or 0,
+        "today_calls": today_calls or 0,
+        "tenant_id": tid,
+    }, request)

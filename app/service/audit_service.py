@@ -81,10 +81,11 @@ class AuditService:
         skill_id: str = "",
         start_time: str = "",
         end_time: str = "",
+        tenant_id: str = "default",
     ) -> tuple[list[dict], int]:
-        """分页查询审计日志"""
+        """分页查询审计日志（tenant_id 多租户过滤）"""
         async with get_db_session() as session:
-            stmt = select(AuditLogORM)
+            stmt = select(AuditLogORM).where(AuditLogORM.tenant_id == tenant_id)
             if user_id:
                 stmt = stmt.where(AuditLogORM.user_id == user_id)
             if action:

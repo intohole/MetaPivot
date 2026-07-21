@@ -91,10 +91,11 @@ class SkillService:
         keyword: str = "",
         owner_id: str = "",
         scope: str = "all",  # all/my/team
+        tenant_id: str = "default",
     ) -> tuple[list[SkillORM], int]:
-        """分页查询（Phase 3: scope 过滤 my/team/all）"""
+        """分页查询（Phase 3: scope 过滤 my/team/all；多租户：tenant_id 过滤）"""
         async with get_db_session() as session:
-            stmt = select(SkillORM)
+            stmt = select(SkillORM).where(SkillORM.tenant_id == tenant_id)
             if scope == "my" and owner_id:
                 stmt = stmt.where(SkillORM.owner_id == owner_id)
             elif scope == "team":
@@ -234,12 +235,17 @@ class SkillService:
             raise AppError(ErrorCode.VALIDATION_ERROR, "input_schema 不能为空", 400)
 
     def _permission_allowed(self, skill_perm: str, user_role: str) -> bool:
-        """简单权限匹配：admin 可调所有，manager 可调 user/manager 级，user 只能调 user 级"""
+        """简单权限匹配：tenant_admin 可调所有，tenant_manager 可调 user/manager 级，user 只能调 user 级
+
+        兼容旧角色名 admin/manager（未上线前的过渡期，DB 迁移后可移除）
+        """
         if skill_perm == "user":
             return True
-        if skill_perm == "manager" and user_role in ("manager", "admin"):
+        admin_roles = ("tenant_admin", "platform_admin", "admin")
+        manager_roles = ("tenant_manager", "manager") + admin_roles
+        if skill_perm in ("manager", "tenant_manager") and user_role in manager_roles:
             return True
-        if skill_perm == "admin" and user_role == "admin":
+        if skill_perm in ("admin", "tenant_admin") and user_role in admin_roles:
             return True
         return False
 

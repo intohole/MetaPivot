@@ -66,7 +66,7 @@ async def list_skills(
     from app.service.skill_service import skill_service
     items, total = await skill_service.list_skills(
         pg.page, pg.page_size, enabled, source_type, keyword,
-        owner_id=user.user_id, scope=scope,
+        owner_id=user.user_id, scope=scope, tenant_id=user.tenant_id,
     )
     return ok(paginate([_skill_dict(s) for s in items], total, pg.page, pg.page_size), request)
 

@@ -115,8 +115,8 @@
             <input v-model="keyword" type="text" class="input flex-1 min-w-[200px]" placeholder="搜索用户名" @keydown.enter="onSearch" aria-label="搜索" />
             <select v-model="roleFilter" class="select w-40" @change="onSearch" aria-label="角色筛选">
               <option value="">全部角色</option>
-              <option value="admin">管理员</option>
-              <option value="manager">管理者</option>
+              <option value="tenant_admin">管理员</option>
+              <option value="tenant_manager">管理者</option>
               <option value="user">普通用户</option>
             </select>
             <button class="btn btn-secondary" @click="onSearch">搜索</button>
@@ -131,7 +131,7 @@
               <p class="text-xs text-ink-subtle font-mono">{{ row.id?.slice(0, 8) }}</p>
             </template>
             <template #role="{ value }">
-              <span :class="['badge', value === 'admin' ? 'badge-danger' : value === 'manager' ? 'badge-warning' : 'badge-info']">{{ value }}</span>
+              <span :class="['badge', value === 'tenant_admin' ? 'badge-danger' : value === 'tenant_manager' ? 'badge-warning' : 'badge-info']">{{ value }}</span>
             </template>
             <template #status="{ value }">
               <span :class="['badge', value === 'active' ? 'badge-success' : 'badge-muted']">{{ value === 'active' ? '启用' : '禁用' }}</span>
@@ -166,8 +166,8 @@
                 <label for="u-role" class="block text-sm font-medium text-ink mb-1">角色</label>
                 <select id="u-role" v-model="form.role" class="select">
                   <option value="user">普通用户</option>
-                  <option value="manager">管理者</option>
-                  <option value="admin">管理员</option>
+                  <option value="tenant_manager">管理者</option>
+                  <option value="tenant_admin">管理员</option>
                 </select>
               </div>
               <div>

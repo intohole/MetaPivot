@@ -12,6 +12,8 @@
       const templates = ref([])
       const instantiating = ref('')
       const loading = ref(true)
+      // P2-6: 企业管理概览（仅管理端可见）
+      const mgmtStats = ref(null)
 
       const statCards = computed(() => [
         { key: 'tasks', label: 'Agent 任务', value: stats.value.tasks, icon: '🤖' },
@@ -19,6 +21,18 @@
         { key: 'workflows', label: '工作流', value: stats.value.workflows, icon: '⚡' },
         { key: 'todayCalls', label: '今日调用', value: stats.value.todayCalls, icon: '📈' }
       ])
+
+      // P2-6: 管理端概览卡片（仅 manager+ 角色有数据）
+      const mgmtCards = computed(() => {
+        if (!mgmtStats.value) return []
+        const m = mgmtStats.value
+        return [
+          { label: '企业用户', value: m.user_count, sub: m.active_users + ' 活跃', icon: '👥' },
+          { label: '定时任务', value: m.schedule_count, icon: '⏰' },
+          { label: 'Agent 任务', value: m.agent_task_count, icon: '🤖' },
+          { label: '今日调用', value: m.today_calls, icon: '📊' },
+        ]
+      })
 
       const loadDashboard = async () => {
         loading.value = true
@@ -46,6 +60,12 @@
           }
           if (tplRes.status === 'fulfilled' && tplRes.value) {
             templates.value = (tplRes.value.items || []).slice(0, 4)
+          }
+          // P2-6: 管理端概览（仅 manager+ 加载，非管理端 403 静默忽略）
+          if (state.hasRole('manager')) {
+            try {
+              mgmtStats.value = await window.API.get('/overview')
+            } catch (_) { /* 非管理端无权限，忽略 */ }
           }
         } finally {
           loading.value = false
@@ -100,6 +120,7 @@
         stats, statCards, recentTasks, templates, instantiating, loading,
         quickActions, onboardingSteps, showOnboarding, startTour,
         instantiateTemplate, state, loadDashboard,
+        mgmtStats, mgmtCards,
       }
     },
     template: `
@@ -116,6 +137,20 @@
             </div>
           </div>
         </div>
+
+        <!-- P2-6: 企业管理概览（仅管理端 manager+ 可见） -->
+        <base-card v-if="mgmtCards.length > 0" title="🏢 企业管理概览" subtitle="当前租户资源用量与活跃度">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div v-for="c in mgmtCards" :key="c.label" class="p-4 rounded-lg border border-border hover:border-brand transition-colors">
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-lg" aria-hidden="true">{{ c.icon }}</span>
+                <p class="text-xs font-medium text-ink-subtle uppercase tracking-wider">{{ c.label }}</p>
+              </div>
+              <p class="text-2xl font-semibold text-ink" style="letter-spacing: -0.02em;">{{ c.value }}</p>
+              <p v-if="c.sub" class="text-xs text-ink-muted mt-1">{{ c.sub }}</p>
+            </div>
+          </div>
+        </base-card>
 
         <!-- 新手引导（无任务时显示） -->
         <base-card v-if="showOnboarding" title="🚀 快速开始指南" subtitle="按步骤完成初始化，4 步上手 MetaPivot">

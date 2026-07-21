@@ -24,6 +24,8 @@ class WorkflowORM(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_by: Mapped[Optional[str]] = mapped_column(String(36))
+    # 多租户隔离字段（默认 'default' 租户，所有查询应按此过滤）
+    tenant_id: Mapped[str] = mapped_column(String(36), default="default", nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -96,6 +98,8 @@ class AuditLogORM(Base):
     error_code: Mapped[Optional[str]] = mapped_column(String(64))
     error_message: Mapped[Optional[str]] = mapped_column(Text)
     ip_address: Mapped[Optional[str]] = mapped_column(String(45))
+    # 多租户隔离字段（默认 'default' 租户，审计日志按租户隔离）
+    tenant_id: Mapped[str] = mapped_column(String(36), default="default", nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False, index=True)
 
 
@@ -112,6 +116,8 @@ class KnowledgeDocumentORM(Base):
     status: Mapped[str] = mapped_column(String(20), default="processing", nullable=False, index=True)
     metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     created_by: Mapped[Optional[str]] = mapped_column(String(36))
+    # 多租户隔离字段（默认 'default' 租户，知识库按租户隔离）
+    tenant_id: Mapped[str] = mapped_column(String(36), default="default", nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
 
 
@@ -179,6 +185,8 @@ class ScheduledTaskORM(Base):
     user_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)
     chat_id: Mapped[Optional[str]] = mapped_column(String(128), index=True)
     channel: Mapped[str] = mapped_column(String(20), nullable=False)
+    # 多租户隔离字段（默认 'default' 租户，定时任务按租户隔离）
+    tenant_id: Mapped[str] = mapped_column(String(36), default="default", nullable=False, index=True)
     # 任务内容
     message: Mapped[str] = mapped_column(Text, nullable=False)  # 触发时执行的 message
     context: Mapped[dict] = mapped_column(JSON, default=dict)

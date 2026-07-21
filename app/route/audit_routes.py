@@ -20,7 +20,7 @@ async def list_logs(
 ):
     from app.service.audit_service import audit_service
     items, total = await audit_service.list_logs(
-        pg.page, pg.page_size, user_id, action, skill_id, start_time, end_time
+        pg.page, pg.page_size, user_id, action, skill_id, start_time, end_time, user.tenant_id
     )
     return ok(paginate(items, total, pg.page, pg.page_size), request)
 

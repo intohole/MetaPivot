@@ -63,10 +63,10 @@ async def list_tasks(
     status: str = "",
     user: CurrentUser = Depends(get_current_user),
 ):
-    """查询 Agent 任务列表（admin 可查所有，普通用户仅查自己的）"""
+    """查询 Agent 任务列表（admin 可查所有，普通用户仅查自己的；按租户隔离）"""
     from app.service.agent_service import agent_service
-    caller_uid = "" if user.role == "admin" else user.user_id
-    items, total = await agent_service.list_tasks(pg.page, pg.page_size, caller_uid, status)
+    caller_uid = "" if user.role in ("tenant_admin", "platform_admin") else user.user_id
+    items, total = await agent_service.list_tasks(pg.page, pg.page_size, caller_uid, status, user.tenant_id)
     return ok(paginate(items, total, pg.page, pg.page_size), request)
 
 
@@ -79,7 +79,7 @@ async def get_task(
     """查询 Agent 任务状态、结果、步骤（仅任务发起人或 admin）"""
     from app.service.agent_service import agent_service
     # admin 可查所有任务，普通用户仅查自己的
-    caller_uid = "" if user.role == "admin" else user.user_id
+    caller_uid = "" if user.role in ("tenant_admin", "platform_admin") else user.user_id
     return ok(await agent_service.get_task(task_id, caller_uid), request)
 
 
@@ -90,7 +90,7 @@ async def stream_task(
 ):
     """SSE 订阅任务步骤事件（仅任务发起人或 admin）"""
     from app.service.agent_service import agent_service
-    caller_uid = "" if user.role == "admin" else user.user_id
+    caller_uid = "" if user.role in ("tenant_admin", "platform_admin") else user.user_id
     return EventSourceResponse(agent_service.stream_task(task_id, caller_uid))
 
 

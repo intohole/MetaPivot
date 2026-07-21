@@ -30,32 +30,40 @@ log = get_logger("auth_service")
 _bearer = HTTPBearer(auto_error=False)
 
 # 角色权限矩阵（与客户端/管理端分离对齐）
-# - user（客户端普通用户）：浏览 + 执行核心场景（Skill/Workflow/Knowledge/Agent）
-# - manager（管理端中层）：在 user 基础上 + webhook/审计查看
-# - admin（管理端管理员）：全权限（含用户管理/系统配置/Skill 发布）
+# 角色命名遵循多租户终局：tenant_* 表示企业内角色，预留 platform_admin 给平台运营
+# - user（客户端终端用户）：浏览 + 执行核心场景（Skill/Workflow/Knowledge/Agent）
+# - tenant_manager（管理端中层）：在 user 基础上 + webhook/审计查看
+# - tenant_admin（管理端企业管理员）：全权限（含用户管理/系统配置/Skill 发布）
+# - platform_admin（平台运营，预留）：跨租户管理（当前未启用）
 ROLE_PERMISSIONS = {
     "user": {
         "agent:chat", "knowledge:read", "knowledge:write",
         "skill:call", "skill:read",
         "workflow:read", "workflow:execute",
     },
-    "manager": {
+    "tenant_manager": {
         "agent:chat", "knowledge:read", "knowledge:write",
         "skill:call", "skill:read",
         "workflow:read", "workflow:execute",
         "webhook:read", "audit:read",
     },
-    "admin": {"*"},  # 全权限
+    "tenant_admin": {"*"},  # 企业内全权限
+    # platform_admin 预留：未来跨租户管理时启用，当前与 tenant_admin 等价
+    "platform_admin": {"*"},
 }
 
 
 class CurrentUser:
-    """请求上下文中的当前用户（轻量对象，避免直接传递 ORM）"""
+    """请求上下文中的当前用户（轻量对象，避免直接传递 ORM）
 
-    def __init__(self, user_id: str, username: str, role: str) -> None:
+    tenant_id 是多租户隔离的核心上下文，所有 Service 层查询应基于此字段过滤。
+    """
+
+    def __init__(self, user_id: str, username: str, role: str, tenant_id: str = "default") -> None:
         self.user_id = user_id
         self.username = username
         self.role = role
+        self.tenant_id = tenant_id
 
     def has_permission(self, permission: str) -> bool:
         perms = ROLE_PERMISSIONS.get(self.role, set())
@@ -79,17 +87,19 @@ async def authenticate(username: str, password: str) -> tuple[UserORM, str]:
             "sub": user.id,
             "username": user.username,
             "role": user.role,
+            "tenant_id": user.tenant_id,
         })
-        log.info("User logged in: {} ({})", user.username, user.role)
+        log.info("User logged in: {} ({}) tenant={}", user.username, user.role, user.tenant_id)
         return user, token
 
 
-async def refresh_token(user_id: str, username: str, role: str) -> str:
-    """刷新令牌"""
+async def refresh_token(user_id: str, username: str, role: str, tenant_id: str = "default") -> str:
+    """刷新令牌（携带 tenant_id 上下文）"""
     return create_access_token({
         "sub": user_id,
         "username": username,
         "role": role,
+        "tenant_id": tenant_id,
     })
 
 
@@ -117,7 +127,9 @@ async def get_current_user(
     if user is None or user.status != "active":
         raise HTTPException(status_code=401, detail="用户不存在或已禁用")
 
-    ctx = CurrentUser(user.id, user.username, user.role)
+    # tenant_id 优先取 JWT claim（性能），fallback 到 DB（兼容旧 token）
+    tenant_id = payload.get("tenant_id") or user.tenant_id
+    ctx = CurrentUser(user.id, user.username, user.role, tenant_id)
     request.state.current_user = ctx
     return ctx
 

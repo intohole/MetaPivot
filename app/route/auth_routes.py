@@ -45,8 +45,8 @@ async def refresh(
     request: Request,
     user: CurrentUser = Depends(get_current_user),
 ):
-    """刷新 JWT（需要当前令牌有效）"""
-    token = await refresh_token(user.user_id, user.username, user.role)
+    """刷新 JWT（需要当前令牌有效，携带 tenant_id 上下文）"""
+    token = await refresh_token(user.user_id, user.username, user.role, user.tenant_id)
     return ok({"token": token, "expires_in": 3600}, request)
 
 
@@ -60,4 +60,5 @@ async def me(
         "user_id": user.user_id,
         "username": user.username,
         "role": user.role,
+        "tenant_id": user.tenant_id,
     }, request)

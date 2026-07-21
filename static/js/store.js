@@ -128,8 +128,10 @@
   // 权限判断
   function hasRole(role) {
     if (!user.value) return false
-    if (role === 'admin') return user.value.role === 'admin'
-    if (role === 'manager') return ['admin', 'manager'].includes(user.value.role)
+    // 逻辑角色名 → DB 角色值映射（DB 使用 tenant_admin/tenant_manager/user/platform_admin）
+    // hasRole('admin') = 企业管理员或以上；hasRole('manager') = 中层或以上
+    if (role === 'admin') return ['tenant_admin', 'platform_admin'].includes(user.value.role)
+    if (role === 'manager') return ['tenant_manager', 'tenant_admin', 'platform_admin'].includes(user.value.role)
     return true
   }
 

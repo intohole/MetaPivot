@@ -126,10 +126,11 @@ def _task_summary(t: AgentTaskORM) -> dict:
 
 async def list_agent_tasks(
     page: int = 1, page_size: int = 20, user_id: str = "", status: str = "",
+    tenant_id: str = "default",
 ) -> tuple[list[dict], int]:
-    """查询任务列表（user_id 为空时返回全部，admin 场景）"""
+    """查询任务列表（user_id 为空时返回全部，admin 场景；tenant_id 多租户过滤）"""
     async with get_db_session() as session:
-        stmt = select(AgentTaskORM)
+        stmt = select(AgentTaskORM).where(AgentTaskORM.tenant_id == tenant_id)
         if user_id:
             stmt = stmt.where(AgentTaskORM.user_id == user_id)
         if status:

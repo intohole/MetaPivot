@@ -47,7 +47,8 @@ async def seed_admin_user() -> None:
         admin = UserORM(
             username="admin",
             password_hash=hash_password("admin123"),
-            role="admin",
+            role="tenant_admin",
+            tenant_id="default",
             im_accounts={},
             status="active",
         )

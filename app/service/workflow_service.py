@@ -70,9 +70,10 @@ class WorkflowService:
         page_size: int = 20,
         enabled: Optional[bool] = None,
         keyword: str = "",
+        tenant_id: str = "default",
     ) -> tuple[list[WorkflowORM], int]:
         async with get_db_session() as session:
-            stmt = select(WorkflowORM)
+            stmt = select(WorkflowORM).where(WorkflowORM.tenant_id == tenant_id)
             if enabled is not None:
                 stmt = stmt.where(WorkflowORM.enabled == enabled)
             if keyword:

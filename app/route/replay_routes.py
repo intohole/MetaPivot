@@ -24,6 +24,6 @@ async def replay_task(
     - langfuse_url 指向 Langfuse UI 的 trace 详情页（若启用）
     """
     from app.service.replay_service import replay_service
-    caller_uid = "" if user.role == "admin" else user.user_id
+    caller_uid = "" if user.role in ("tenant_admin", "platform_admin") else user.user_id
     result = await replay_service.get_replay(task_id, caller_uid)
     return ok(result, request)

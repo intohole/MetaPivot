@@ -145,9 +145,10 @@ class KnowledgeService:
         page: int = 1,
         page_size: int = 20,
         status: str = "",
+        tenant_id: str = "default",
     ) -> tuple[list[dict], int]:
         async with get_db_session() as session:
-            stmt = select(KnowledgeDocumentORM)
+            stmt = select(KnowledgeDocumentORM).where(KnowledgeDocumentORM.tenant_id == tenant_id)
             if status:
                 stmt = stmt.where(KnowledgeDocumentORM.status == status)
             count_stmt = select(func.count()).select_from(stmt.subquery())

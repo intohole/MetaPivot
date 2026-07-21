@@ -364,8 +364,8 @@
                 <label for="skill-perm" class="block text-sm font-medium text-ink mb-1">权限</label>
                 <select id="skill-perm" v-model="form.permission" class="select">
                   <option value="user">普通用户</option>
-                  <option value="manager">管理者</option>
-                  <option value="admin">仅管理员</option>
+                  <option value="tenant_manager">管理者</option>
+                  <option value="tenant_admin">仅管理员</option>
                 </select>
               </div>
               <div>

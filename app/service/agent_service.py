@@ -133,9 +133,10 @@ class AgentService:
     async def list_tasks(
         self, page: int = 1, page_size: int = 20,
         user_id: str = "", status: str = "",
+        tenant_id: str = "default",
     ) -> tuple[list[dict], int]:
-        """查询任务列表（user_id 为空时返回全部，admin 场景）"""
-        return await list_agent_tasks(page, page_size, user_id, status)
+        """查询任务列表（user_id 为空时返回全部，admin 场景；tenant_id 多租户过滤）"""
+        return await list_agent_tasks(page, page_size, user_id, status, tenant_id)
 
     async def start_task_and_wait(
         self,
