@@ -21,6 +21,8 @@ class UserORM(Base):
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), default="user", nullable=False)
+    # 多租户预留字段（当前所有用户归属 'default' 租户，后续企业级部署启用隔离）
+    tenant_id: Mapped[str] = mapped_column(String(36), default="default", nullable=False, index=True)
     im_accounts: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)

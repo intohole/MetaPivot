@@ -29,10 +29,22 @@ log = get_logger("auth_service")
 # JWT Bearer 提取器
 _bearer = HTTPBearer(auto_error=False)
 
-# 角色权限矩阵
+# 角色权限矩阵（与客户端/管理端分离对齐）
+# - user（客户端普通用户）：浏览 + 执行核心场景（Skill/Workflow/Knowledge/Agent）
+# - manager（管理端中层）：在 user 基础上 + webhook/审计查看
+# - admin（管理端管理员）：全权限（含用户管理/系统配置/Skill 发布）
 ROLE_PERMISSIONS = {
-    "user": {"agent:chat", "knowledge:read", "skill:call"},
-    "manager": {"agent:chat", "knowledge:read", "skill:call", "workflow:execute", "webhook:read"},
+    "user": {
+        "agent:chat", "knowledge:read", "knowledge:write",
+        "skill:call", "skill:read",
+        "workflow:read", "workflow:execute",
+    },
+    "manager": {
+        "agent:chat", "knowledge:read", "knowledge:write",
+        "skill:call", "skill:read",
+        "workflow:read", "workflow:execute",
+        "webhook:read", "audit:read",
+    },
     "admin": {"*"},  # 全权限
 }
 

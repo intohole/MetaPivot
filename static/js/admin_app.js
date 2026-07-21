@@ -1,10 +1,10 @@
 /* ============================================================
-   客户端主入口 — Vue 应用 + 布局 + 路由（普通用户使用）
+   管理端主入口 — Vue 应用 + 布局 + 路由（企业管理员/经理使用）
    页面组件在各自文件中注册到 window.Pages，本文件最后加载
-   与管理端 static/js/admin_app.js 区别：
-   - 包含 /login 登录页（管理端无登录页，登录后按角色分流）
-   - 精简路由：工作台 / Agent / 知识库 / 工作流 / 模板 / Skill / IM 绑定 / 定时任务
-   - 无治理类路由（用户管理 / 审计 / 系统配置 / DLQ / Webhook / Skill Review）
+   与客户端 static/js/app.js 区别：
+   - 无 /login 路由（登录在客户端 index.html，登录后按角色分流到本端）
+   - 所有路由需 admin/manager 角色（路由守卫统一拦截）
+   - 导航分组：仪表盘 / 自动化 / 治理（管理视角）
    ============================================================ */
 (function () {
   const { createApp, computed, defineComponent, watch, ref, onMounted, onUnmounted } = Vue
@@ -13,14 +13,13 @@
   /* === 预注册命令（供 Command Palette 消费）=== */
   if (window.Commands) {
     const navCmds = [
-      { id: 'nav-dashboard', label: '工作台', icon: '📊', path: '/dashboard', keywords: 'dashboard home 首页 工作台', group: 'navigation', shortcut: 'g d' },
+      { id: 'nav-dashboard', label: '仪表盘', icon: '📊', path: '/dashboard', keywords: 'dashboard home 首页', group: 'navigation', shortcut: 'g d' },
       { id: 'nav-agent', label: 'Agent 任务', icon: '🤖', path: '/agent', keywords: 'agent 任务 对话', group: 'navigation', shortcut: 'g a' },
-      { id: 'nav-skills', label: '我的 Skill', icon: '🧩', path: '/skills', keywords: 'skill 技能 mcp', group: 'navigation', shortcut: 'g s' },
+      { id: 'nav-skills', label: 'Skill 管理', icon: '🧩', path: '/skills', keywords: 'skill 技能 mcp', group: 'navigation', shortcut: 'g s' },
       { id: 'nav-workflows', label: '工作流', icon: '⚡', path: '/workflows', keywords: 'workflow 工作流 flow', group: 'navigation', shortcut: 'g w' },
       { id: 'nav-templates', label: '模板库', icon: '🗂️', path: '/templates', keywords: 'template 模板 sop', group: 'navigation', shortcut: 'g t' },
       { id: 'nav-knowledge', label: '知识库', icon: '📚', path: '/knowledge', keywords: 'knowledge 知识 文档', group: 'navigation', shortcut: 'g k' },
-      { id: 'nav-channels', label: 'IM 绑定', icon: '💬', path: '/channels', keywords: 'channel 渠道 钉钉 企微 飞书 绑定', group: 'navigation', shortcut: 'g c' },
-      { id: 'nav-schedules', label: '定时任务', icon: '⏰', path: '/schedules', keywords: 'schedule 定时 cron 任务', group: 'navigation', shortcut: 'g t' }
+      { id: 'nav-channels', label: 'IM 渠道', icon: '💬', path: '/channels', keywords: 'channel 渠道 钉钉 企微 飞书', group: 'navigation', shortcut: 'g c' }
     ]
     navCmds.forEach(c => window.Commands.register(c))
     window.Commands.register({
@@ -35,7 +34,7 @@
       id: 'action-theme', label: '切换主题', icon: '🌙', keywords: 'theme dark light 主题 暗色', group: 'actions',
       action: () => window.AppState.toggleTheme()
     })
-    // 客户端动作命令（参数化命令用 inputPrompt 标记）
+    // 管理端专属动作命令（与客户端一致的参数化命令模式）
     window.Commands.registerActions([
       {
         id: 'action-agent-task', label: '发起 Agent 任务', icon: '🤖', keywords: 'agent task 对话 发起 ask', group: 'actions',
@@ -60,29 +59,53 @@
         action: (q) => { window.AppState.pendingQuery.value = q; window.AppState.navigate('/knowledge') }
       },
       {
+        id: 'action-create-webhook', label: '新建 Webhook', icon: '🔗', keywords: 'create webhook 新建 触发器', group: 'actions',
+        action: () => { window.AppState.pendingAction.value = 'create-webhook'; window.AppState.navigate('/webhooks') }
+      },
+      {
         id: 'action-save-last-task-as-skill', label: '保存最近任务为 Skill', icon: '💾',
         keywords: 'save skill task 录制 沉淀', group: 'actions',
         action: () => { window.AppState.pendingAction.value = 'save-last-task-as-skill'; window.AppState.navigate('/agent') }
+      },
+      {
+        id: 'action-skill-review', label: 'Skill 自进化 Review', icon: '📝',
+        keywords: 'skill review draft revision 自进化 草稿 审批', group: 'actions',
+        action: () => window.AppState.navigate('/skill-review')
+      },
+      {
+        id: 'action-view-audit', label: '查看审计日志', icon: '📋',
+        keywords: 'audit log 审计 日志', group: 'actions',
+        action: () => window.AppState.navigate('/audit')
+      },
+      {
+        id: 'action-view-configs', label: '系统配置', icon: '⚙️',
+        keywords: 'config settings 配置 系统', group: 'actions',
+        action: () => window.AppState.navigate('/configs')
       }
     ])
   }
 
-  /* === 路由配置（客户端：登录 + 用户视角的核心使用场景）=== */
+  /* === 路由配置（管理端：无 login，全量业务路由 + 角色守卫）=== */
   const ROUTES = [
-    { path: '/login', label: '登录', component: 'LoginPage', icon: '🔑', hideNav: true },
-    { path: '/dashboard', label: '工作台', component: 'DashboardPage', icon: '📊' },
+    { path: '/dashboard', label: '仪表盘', component: 'DashboardPage', icon: '📊' },
     { path: '/agent', label: 'Agent 任务', component: 'AgentPage', icon: '🤖' },
-    { path: '/skills', label: '我的 Skill', component: 'SkillsPage', icon: '🧩' },
+    { path: '/skills', label: 'Skill 管理', component: 'SkillsPage', icon: '🧩' },
+    { path: '/skill-review', label: '自进化 Review', component: 'SkillReviewPage', icon: '📝', hideNav: true },
     { path: '/workflows', label: '工作流', component: 'WorkflowsPage', icon: '⚡' },
     { path: '/templates', label: '模板库', component: 'TemplatesPage', icon: '🗂️' },
+    { path: '/webhooks', label: 'Webhook', component: 'WebhooksPage', icon: '🔗', roles: ['admin'] },
     { path: '/knowledge', label: '知识库', component: 'KnowledgePage', icon: '📚' },
-    { path: '/channels', label: 'IM 绑定', component: 'ChannelsPage', icon: '💬' },
-    { path: '/schedules', label: '定时任务', component: 'SchedulesPage', icon: '⏰' }
+    { path: '/audit', label: '审计日志', component: 'AuditPage', icon: '📋', roles: ['admin', 'manager'] },
+    { path: '/users', label: '用户管理', component: 'UsersPage', icon: '👥', roles: ['admin'] },
+    { path: '/channels', label: 'IM 渠道', component: 'ChannelsPage', icon: '💬' },
+    { path: '/schedules', label: '定时任务', component: 'SchedulesPage', icon: '⏰' },
+    { path: '/dlq', label: '死信队列', component: 'DlqPage', icon: '⚠️', roles: ['admin', 'manager'] },
+    { path: '/configs', label: '系统配置', component: 'ConfigsPage', icon: '⚙️', roles: ['admin'] }
   ]
 
   const currentRoute = computed(() => {
     const p = state.currentRoute.value
-    return ROUTES.find(r => r.path === p) || ROUTES[1]
+    return ROUTES.find(r => r.path === p) || ROUTES[0]
   })
 
   const visibleNav = computed(() => {
@@ -93,11 +116,11 @@
     })
   })
 
-  /* === 侧边栏分组（客户端视角：工作台 / 自动化 / 我的）=== */
+  /* === 侧边栏分组（管理端视角：仪表盘 / 自动化 / 治理）=== */
   const NAV_GROUPS = [
     { label: '工作台', paths: ['/dashboard', '/agent', '/knowledge'] },
-    { label: '自动化', paths: ['/workflows', '/skills', '/templates', '/schedules'] },
-    { label: '我的', paths: ['/channels'] }
+    { label: '自动化', paths: ['/workflows', '/skills', '/templates', '/webhooks', '/channels', '/schedules'] },
+    { label: '治理', paths: ['/audit', '/users', '/configs', '/dlq'] }
   ]
   const navGroups = computed(() => NAV_GROUPS.map(g => ({
     label: g.label,
@@ -113,15 +136,22 @@
       : [{ label: r.label }]
   })
 
-  /* === 是否显示"切换到管理端"入口（admin/manager 可见）=== */
-  const showAdminEntry = computed(() => state.hasRole('manager'))
-
-  /* === 路由守卫 === */
+  /* === 路由守卫（管理端：未登录跳转客户端登录页，无管理权限跳转客户端）=== */
   function guardRoute() {
     const path = state.currentRoute.value
     const route = ROUTES.find(r => r.path === path)
-    if (!state.user.value && path !== '/login') { state.navigate('/login'); return }
-    if (state.user.value && path === '/login') { state.navigate('/dashboard'); return }
+    // 未登录：跳转客户端登录页（登录后按角色分流回管理端）
+    if (!state.user.value) {
+      window.location.href = '/#/login'
+      return
+    }
+    // 非管理员/经理：跳转客户端（管理端不对外开放）
+    if (!state.hasRole('manager')) {
+      state.notify('管理端仅限管理员/经理访问', 'warning')
+      window.location.href = '/'
+      return
+    }
+    // 具体路由级权限（如 users/configs 仅 admin）
     if (route?.roles && !route.roles.some(r => state.hasRole(r))) {
       state.notify('无权访问该页面', 'warning')
       state.navigate('/dashboard')
@@ -130,7 +160,7 @@
 
   /* === 应用根组件 === */
   const App = defineComponent({
-    name: 'App',
+    name: 'AdminApp',
     setup() {
       watch(state.currentRoute, guardRoute, { immediate: true })
       watch(state.user, (u) => {
@@ -146,9 +176,9 @@
         })
         if (action === 'confirm') state.logout()
       }
-      // 切换到管理端（admin/manager 可见）
-      const gotoAdmin = () => {
-        window.location.href = '/admin'
+      // 切换到客户端（普通用户视角）
+      const gotoClient = () => {
+        window.location.href = '/'
       }
       const paletteRef = ref(null)
       const onGlobalKeydown = (e) => {
@@ -159,21 +189,20 @@
       }
       onMounted(() => document.addEventListener('keydown', onGlobalKeydown))
       onUnmounted(() => document.removeEventListener('keydown', onGlobalKeydown))
-      return { state, currentRoute, visibleNav, navGroups, breadcrumbs, sidebarOpen, toggleSidebar, handleLogout, gotoAdmin, showAdminEntry, paletteRef }
+      return { state, currentRoute, visibleNav, navGroups, breadcrumbs, sidebarOpen, toggleSidebar, handleLogout, gotoClient, paletteRef }
     },
     template: `
       <div>
         <loading-bar />
         <toast-container />
 
-        <login-page v-if="currentRoute.path === '/login'" />
-
-        <div v-else class="flex min-h-screen">
+        <div class="flex min-h-screen">
           <aside :class="['bg-surface border-r border-border transition-all duration-200 flex flex-col', sidebarOpen ? 'w-60' : 'w-0 overflow-hidden']"
                  aria-label="主导航" data-tour="sidebar">
             <div class="flex items-center gap-2 px-5 h-16 border-b border-border">
               <span class="text-2xl" aria-hidden="true">🤖</span>
               <span class="font-bold text-ink">MetaPivot</span>
+              <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded bg-brand-light text-brand font-semibold uppercase tracking-wider" title="管理端">Admin</span>
             </div>
             <nav class="flex-1 py-4 px-2 space-y-5" role="navigation" data-tour="sidebar-nav">
               <div v-for="g in navGroups" :key="g.label">
@@ -195,8 +224,8 @@
                 <p class="font-medium text-ink truncate">{{ state.user.value.username }}</p>
                 <p class="mt-0.5">{{ state.user.value.role }}</p>
               </div>
-              <button v-if="showAdminEntry" class="btn btn-ghost w-full justify-start text-sm" @click="gotoAdmin" aria-label="切换到管理端" title="管理员/经理专属">
-                <span aria-hidden="true">⚙️</span> 切换到管理端
+              <button class="btn btn-ghost w-full justify-start text-sm" @click="gotoClient" aria-label="切换到客户端" title="以普通用户视角访问">
+                <span aria-hidden="true">👤</span> 切换到客户端
               </button>
               <button class="btn btn-ghost w-full justify-start text-sm" @click="handleLogout" aria-label="退出登录">
                 <span aria-hidden="true">🚪</span> 退出登录
@@ -263,19 +292,22 @@
   app.component('Drawer', C.Drawer)
   app.component('AgentTrace', C.AgentTrace)
 
-  // 注册页面组件（客户端精简页面）
+  // 注册页面组件（管理端全量页面）
   const P = window.Pages || {}
   const pageMap = {
-    'LoginPage': P.Login, 'DashboardPage': P.Dashboard, 'AgentPage': P.Agent,
-    'SkillsPage': P.Skills, 'WorkflowsPage': P.Workflows, 'TemplatesPage': P.Templates,
-    'KnowledgePage': P.Knowledge, 'ChannelsPage': P.Channels, 'SchedulesPage': P.Schedules
+    'DashboardPage': P.Dashboard, 'AgentPage': P.Agent,
+    'SkillsPage': P.Skills, 'SkillReviewPage': P.SkillReview, 'WorkflowsPage': P.Workflows,
+    'TemplatesPage': P.Templates, 'KnowledgePage': P.Knowledge,
+    'AuditPage': P.Audit, 'UsersPage': P.Users, 'ChannelsPage': P.Channels,
+    'ConfigsPage': P.Configs, 'WebhooksPage': P.Webhooks,
+    'SchedulesPage': P.Schedules, 'DlqPage': P.Dlq
   }
   for (const [name, def] of Object.entries(pageMap)) {
     app.component(name, def || { template: '<div class="p-6 text-ink-muted">页面加载失败：' + name + '</div>' })
   }
 
   app.mount('#app')
-  // 启动后异步校验 token 有效性（401 时 API 层自动 refresh，refresh 失败则 logout）
+  // 启动后异步校验 token 有效性
   if (state.user.value) state.validateToken()
-  console.log('MetaPivot 客户端已启动')
+  console.log('MetaPivot 管理端已启动')
 })()

@@ -28,7 +28,13 @@
           })
           state.setAuth(data.token, data.user)
           state.notify('登录成功，欢迎回来 ' + data.user.username, 'success')
-          state.navigate('/dashboard')
+          // 按角色分流：admin/manager → 管理端，user → 客户端
+          const isAdmin = ['admin', 'manager'].includes(data.user.role)
+          if (isAdmin) {
+            window.location.href = '/admin#/dashboard'
+          } else {
+            state.navigate('/dashboard')
+          }
         } catch (e) {
           // API 层已统一 Toast，此处仅重置密码
           form.password = ''

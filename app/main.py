@@ -275,14 +275,23 @@ if _os.path.isdir(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
     log.info("Static files mounted at /static")
 
-    # 根路由返回管理后台首页（hash 路由的 SPA，仅 / 需后端返回 HTML）
+    # 根路由返回客户端首页（hash 路由的 SPA，仅 / 需后端返回 HTML）
     @app.get("/", include_in_schema=False, tags=["frontend"])
-    async def serve_admin_index():
-        """根路由：返回管理后台首页"""
+    async def serve_client_index():
+        """根路由：返回客户端首页（普通用户入口）"""
         _index = _os.path.join(_static_dir, "index.html")
         if _os.path.exists(_index):
             return FileResponse(_index)
         return JSONResponse({"message": "MetaPivot API", "docs": "/docs"})
+
+    # 管理端入口（/admin 返回管理端 HTML，需 admin/manager 角色，前端路由守卫控制）
+    @app.get("/admin", include_in_schema=False, tags=["frontend"])
+    async def serve_admin_index():
+        """管理端路由：返回管理端首页（企业管理员/经理入口）"""
+        _admin = _os.path.join(_static_dir, "admin.html")
+        if _os.path.exists(_admin):
+            return FileResponse(_admin)
+        return JSONResponse({"message": "MetaPivot Admin", "docs": "/docs"})
 
 
 # 注：生产部署若通过 `uvicorn app.main:app` 启动（非 python -m app.main），

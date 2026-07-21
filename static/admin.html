@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="MetaPivot 企业IM自动化办公平台 — 客户端" />
-  <title>MetaPivot 客户端</title>
+  <meta name="description" content="MetaPivot 企业管理端 — 自动化平台治理后台" />
+  <title>MetaPivot 管理端</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -25,15 +25,15 @@
   </script>
   <!-- Vue 3 生产版（国内 CDN） -->
   <script src="https://cdn.bootcdn.net/ajax/libs/vue/3.4.21/vue.global.prod.min.js" crossorigin="anonymous"></script>
-  <!-- Round 3: Markdown 渲染（marked + highlight.js + DOMPurify XSS 防护） -->
+  <!-- Markdown 渲染（marked + highlight.js + DOMPurify XSS 防护） -->
   <script src="https://cdn.bootcdn.net/ajax/libs/marked/12.0.2/marked.min.js"></script>
   <script src="https://cdn.bootcdn.net/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
   <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/highlight.js/11.9.0/styles/github.min.css" />
   <script src="https://cdn.bootcdn.net/ajax/libs/dompurify/3.0.11/purify.min.js"></script>
-  <!-- Round 3: Drawflow DAG 可视化编辑器 -->
+  <!-- Drawflow DAG 可视化编辑器（管理端工作流编辑必需） -->
   <script src="https://cdn.bootcdn.net/ajax/libs/drawflow/0.0.59/drawflow.min.js"></script>
   <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/drawflow/0.0.59/drawflow.min.css" />
-  <!-- Round 4: driver.js 新手引导（轻量零依赖，5KB gzipped；注意 driver.min.js 404 必须用 iife 构建） -->
+  <!-- driver.js 新手引导 -->
   <script src="https://cdn.bootcdn.net/ajax/libs/driver.js/1.3.1/driver.js.iife.js"></script>
   <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/driver.js/1.3.1/driver.min.css" />
   <link rel="stylesheet" href="/static/css/styles.css" />
@@ -43,12 +43,12 @@
     <div class="flex items-center justify-center min-h-screen text-center p-8">
       <div>
         <h1 class="text-2xl font-bold mb-2">需要启用 JavaScript</h1>
-        <p class="text-ink-muted">MetaPivot 客户端依赖 JavaScript 运行，请在浏览器设置中启用。</p>
+        <p class="text-ink-muted">MetaPivot 管理端依赖 JavaScript 运行，请在浏览器设置中启用。</p>
       </div>
     </div>
   </noscript>
   <div id="app"></div>
-  <!-- 基础依赖（顺序加载）— ?v=20260720 缓存破坏，确保浏览器加载最新版本 -->
+  <!-- 基础依赖（与客户端共享）— ?v=20260720 缓存破坏 -->
   <script src="/static/js/store.js?v=20260720"></script>
   <script src="/static/js/api.js?v=20260720"></script>
   <script src="/static/js/utils/markdown.js?v=20260720"></script>
@@ -68,18 +68,23 @@
   <script src="/static/js/components/command_palette.js?v=20260720"></script>
   <script src="/static/js/components/overlay.js?v=20260720"></script>
   <script src="/static/js/components/navigation.js?v=20260720"></script>
-  <!-- 客户端业务页面（工作台 / Agent / 知识 / 工作流 / 模板 / Skill / IM / 定时任务） -->
-  <script src="/static/js/pages/login.js?v=20260720"></script>
+  <!-- 管理端业务页面（治理 + 配置 + 全局运营） -->
   <script src="/static/js/pages/dashboard.js?v=20260720"></script>
   <script src="/static/js/pages/agent.js?v=20260720"></script>
   <script src="/static/js/pages/skills.js?v=20260720"></script>
+  <script src="/static/js/pages/skill_review.js?v=20260720"></script>
   <script src="/static/js/pages/workflow_editor.js?v=20260720"></script>
   <script src="/static/js/pages/workflows.js?v=20260720"></script>
   <script src="/static/js/pages/templates.js?v=20260720"></script>
+  <script src="/static/js/pages/webhooks.js?v=20260720"></script>
   <script src="/static/js/pages/knowledge.js?v=20260720"></script>
+  <script src="/static/js/pages/audit.js?v=20260720"></script>
+  <script src="/static/js/pages/users.js?v=20260720"></script>
   <script src="/static/js/pages/channels.js?v=20260720"></script>
+  <script src="/static/js/pages/configs.js?v=20260720"></script>
   <script src="/static/js/pages/schedules.js?v=20260720"></script>
-  <!-- 应用主入口（最后加载） -->
-  <script src="/static/js/app.js?v=20260720"></script>
+  <script src="/static/js/pages/dlq.js?v=20260720"></script>
+  <!-- 管理端主入口（最后加载） -->
+  <script src="/static/js/admin_app.js?v=20260720"></script>
 </body>
 </html>
