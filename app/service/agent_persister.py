@@ -71,6 +71,7 @@ def rebuild_state(task: AgentTaskORM, max_steps: int) -> AgentState:
         user_id=task.user_id or "",
         channel=task.channel,
         chat_id=task.chat_id or "",
+        tenant_id=task.tenant_id,
         original_message=task.original_message or "",
         intent=task.intent or "",
         mode=task.mode or "agent",
@@ -193,6 +194,7 @@ def step_dict(s: AgentTaskStepORM) -> dict:
 async def audit_task_result(
     task_id: str, user_id: str, channel: str, message: str,
     state: AgentState, started_at: Optional[datetime], request_id: str,
+    tenant_id: str = "default",
 ) -> None:
     """审计 Agent 任务执行结果（非阻塞，失败不影响主流程）
 
@@ -208,7 +210,7 @@ async def audit_task_result(
             output_data=state.result, duration_ms=duration,
             status="success" if state.status == AgentStatus.COMPLETED else "failed",
             error_message=state.error.get("message") if state.error else None,
-            request_id=request_id,
+            request_id=request_id, tenant_id=tenant_id,
         )
     except Exception as e:
         from app.utils.logger import get_logger
@@ -218,6 +220,7 @@ async def audit_task_result(
 async def audit_task_event(
     task_id: str, user_id: str, action: str,
     input_data: dict, status: str = "success", request_id: str = "",
+    tenant_id: str = "default",
 ) -> None:
     """审计 Agent 任务事件（cancel/confirm 等，非阻塞）"""
     from app.service.audit_service import audit_service
@@ -225,6 +228,7 @@ async def audit_task_event(
         await audit_service.log_action(
             user_id=user_id, action=action, task_id=task_id,
             input_data=input_data, status=status, request_id=request_id,
+            tenant_id=tenant_id,
         )
     except Exception as e:
         from app.utils.logger import get_logger

@@ -43,7 +43,7 @@ async def users(
     role: str = "",
     user: CurrentUser = Depends(require_permission("user:read")),
 ):
-    items, total = await list_users(pg.page, pg.page_size, keyword, role)
+    items, total = await list_users(pg.page, pg.page_size, keyword, role, tenant_id=user.tenant_id)
     return ok(paginate([_user_dict(u) for u in items], total, pg.page, pg.page_size), request)
 
 
@@ -53,7 +53,9 @@ async def create_user_endpoint(
     request: Request,
     user: CurrentUser = Depends(require_permission("user:manage")),
 ):
-    new_user = await create_user(body.username, body.password, body.role, body.im_accounts)
+    new_user = await create_user(
+        body.username, body.password, body.role, body.im_accounts, tenant_id=user.tenant_id)
+    await _audit_user_op(user, "user.create", new_user.id, {"username": body.username, "role": body.role})
     return ok(_user_dict(new_user), request)
 
 
@@ -70,8 +72,24 @@ async def update_user_endpoint(
         role=body.role,
         im_accounts=body.im_accounts,
         status_=body.status,
+        tenant_id=user.tenant_id,
+        operator_id=user.user_id,
     )
+    changed = {k: v for k, v in {"role": body.role, "status": body.status}.items() if v}
+    if body.password:
+        changed["password"] = "***"
+    await _audit_user_op(user, "user.update", user_id, changed)
     return ok({"id": updated.id, "updated_at": updated.updated_at.isoformat() if updated.updated_at else None}, request)
+
+
+async def _audit_user_op(operator: CurrentUser, action: str, target_user_id: str, detail: dict) -> None:
+    """用户管理操作审计（带租户隔离上下文；密码等敏感值不入日志）"""
+    from app.service.audit_service import audit_service
+    await audit_service.log_action(
+        user_id=operator.user_id, action=action,
+        input_data={"target_user_id": target_user_id, **detail},
+        status="success", tenant_id=operator.tenant_id,
+    )
 
 
 def _user_dict(u) -> dict:

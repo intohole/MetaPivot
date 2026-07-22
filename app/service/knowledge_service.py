@@ -33,6 +33,7 @@ class KnowledgeService:
         file,
         metadata: str,
         user_id: str,
+        tenant_id: str = "default",
     ) -> dict:
         """上传文档
 
@@ -82,6 +83,7 @@ class KnowledgeService:
                 status="processing",
                 metadata_=meta_dict,
                 created_by=user_id,
+                tenant_id=tenant_id,
             )
             session.add(doc)
             await session.flush()
@@ -157,10 +159,10 @@ class KnowledgeService:
             items = (await session.execute(stmt)).scalars().all()
             return [self._to_dict(d) for d in items], total
 
-    async def delete_document(self, document_id: str) -> dict:
+    async def delete_document(self, document_id: str, tenant_id: str = "") -> dict:
         async with get_db_session() as session:
             doc = await session.get(KnowledgeDocumentORM, document_id)
-            if doc is None:
+            if doc is None or (tenant_id and doc.tenant_id != tenant_id):
                 raise AppError(ErrorCode.RESOURCE_NOT_FOUND, "文档不存在", 404)
             # 删除本地文件
             if doc.file_path and os.path.exists(doc.file_path):

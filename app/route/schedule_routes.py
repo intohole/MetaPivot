@@ -54,6 +54,7 @@ async def create_schedule(
         user_id=user.user_id,
         channel="api",
         description=body.description,
+        tenant_id=user.tenant_id,
     )
     return ok({"task_id": task_id, "status": "pending"}, request)
 

@@ -50,7 +50,7 @@ async def create_skill(
     user: CurrentUser = Depends(require_permission("skill:manage")),
 ):
     from app.service.skill_service import skill_service
-    return ok(await skill_service.create_skill(body.model_dump(), owner_id=user.user_id), request)
+    return ok(await skill_service.create_skill(body.model_dump(), owner_id=user.user_id, tenant_id=user.tenant_id), request)
 
 
 @router.get("", summary="Skill 列表")
@@ -80,7 +80,7 @@ async def create_skill_from_workflow(
 ):
     from app.service.skill_service import skill_service
     return ok(await skill_service.create_skill_from_workflow(
-        workflow_id, body.name, body.description, owner_id=user.user_id, tags=body.tags), request)
+        workflow_id, body.name, body.description, owner_id=user.user_id, tags=body.tags, tenant_id=user.tenant_id), request)
 
 
 @router.post("/from-task/{task_id}", status_code=201, summary="从 Agent 任务录制 Skill")
@@ -92,7 +92,7 @@ async def create_skill_from_task(
 ):
     from app.service.skill_service import skill_service
     return ok(await skill_service.record_task_to_skill(
-        task_id, body.name, body.description, owner_id=user.user_id, tags=body.tags), request)
+        task_id, body.name, body.description, owner_id=user.user_id, tags=body.tags, tenant_id=user.tenant_id), request)
 
 
 @router.post("/extract-from-task/{task_id}", summary="LLM 抽取 skill 草稿（不持久化）")
@@ -112,7 +112,7 @@ async def get_skill(
     user: CurrentUser = Depends(require_permission("skill:read")),
 ):
     from app.service.skill_service import skill_service
-    skill = await skill_service.get_skill(skill_id)
+    skill = await skill_service.get_skill(skill_id, tenant_id=user.tenant_id)
     return ok(_skill_dict(skill), request)
 
 
@@ -125,7 +125,7 @@ async def update_skill(
 ):
     from app.service.skill_service import skill_service
     update_data = {k: v for k, v in body.model_dump().items() if v is not None}
-    return ok(await skill_service.update_skill(skill_id, update_data), request)
+    return ok(await skill_service.update_skill(skill_id, update_data, tenant_id=user.tenant_id), request)
 
 
 @router.delete("/{skill_id}", summary="删除 Skill")
@@ -135,7 +135,7 @@ async def delete_skill(
     user: CurrentUser = Depends(require_permission("skill:manage")),
 ):
     from app.service.skill_service import skill_service
-    return ok(await skill_service.delete_skill(skill_id), request)
+    return ok(await skill_service.delete_skill(skill_id, tenant_id=user.tenant_id), request)
 
 
 @router.post("/{skill_id}/enable", summary="启用 Skill")
@@ -145,7 +145,7 @@ async def enable_skill(
     user: CurrentUser = Depends(require_permission("skill:manage")),
 ):
     from app.service.skill_service import skill_service
-    return ok(await skill_service.set_enabled(skill_id, True), request)
+    return ok(await skill_service.set_enabled(skill_id, True, tenant_id=user.tenant_id), request)
 
 
 @router.post("/{skill_id}/disable", summary="禁用 Skill")
@@ -155,7 +155,7 @@ async def disable_skill(
     user: CurrentUser = Depends(require_permission("skill:manage")),
 ):
     from app.service.skill_service import skill_service
-    return ok(await skill_service.set_enabled(skill_id, False), request)
+    return ok(await skill_service.set_enabled(skill_id, False, tenant_id=user.tenant_id), request)
 
 
 @router.post("/{skill_id}/test", summary="测试 Skill")
@@ -178,7 +178,7 @@ async def execute_skill(
 ):
     """执行 Skill（写审计 + call_count），供 ⌘K 命令面板快捷调用"""
     from app.service.skill_service import skill_service
-    return ok(await skill_service.execute(skill_id, body.input, user.user_id), request)
+    return ok(await skill_service.execute(skill_id, body.input, user.user_id, tenant_id=user.tenant_id), request)
 
 
 @router.post("/{skill_id}/publish", summary="发布到团队（private→shared）")
@@ -188,7 +188,7 @@ async def publish_skill(
     user: CurrentUser = Depends(require_permission("skill:manage")),
 ):
     from app.service.skill_service import skill_service
-    return ok(await skill_service.publish_to_team(skill_id, user.user_id), request)
+    return ok(await skill_service.publish_to_team(skill_id, user.user_id, tenant_id=user.tenant_id), request)
 
 
 # ============ Skill 自进化：健康度 & 手动优化 ============

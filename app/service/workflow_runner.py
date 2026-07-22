@@ -35,6 +35,7 @@ async def run_execution(
     context_mod: Optional[dict] = None,
     workflow_id: str = "",
     exec_stack: Optional[list] = None,
+    tenant_id: str = "default",
 ) -> None:
     """异步推进工作流执行
 
@@ -51,6 +52,7 @@ async def run_execution(
             "__adj": wf_def.adj,
             "__current_workflow_id": workflow_id,
             "__exec_stack": exec_stack if exec_stack is not None else [],
+            "__tenant_id": tenant_id,  # Sprint 13: 节点级租户传播（skill_call/agent_call/sub_workflow）
         }
         if context_mod:
             context["variables"].update(context_mod)
@@ -104,7 +106,7 @@ async def run_execution(
                     user_id=user_id, action="workflow.execute",
                     workflow_id=execution_id, input_data=inputs,
                     output_data=outputs, status=final_status,
-                    request_id=get_request_id(),
+                    request_id=get_request_id(), tenant_id=tenant_id,
                 )
             except Exception as audit_e:
                 log.warning("audit workflow {} failed: {}", execution_id, audit_e)

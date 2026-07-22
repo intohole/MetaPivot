@@ -33,6 +33,7 @@ class IScheduler(Protocol):
         channel: str = "api",
         context: Optional[dict] = None,
         description: str = "",
+        tenant_id: str = "default",
     ) -> int:
         """创建定时任务
 
@@ -46,6 +47,7 @@ class IScheduler(Protocol):
             channel: 渠道（api/im_dingtalk/...）
             context: 上下文（传递给执行时的 Agent）
             description: 用户可读描述
+            tenant_id: 多租户隔离（Sprint 13，执行时透传给 Agent 任务）
 
         Returns:
             scheduled_task_id

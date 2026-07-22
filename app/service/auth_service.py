@@ -154,8 +154,9 @@ async def create_user(
     password: str,
     role: str = "user",
     im_accounts: Optional[dict] = None,
+    tenant_id: str = "default",
 ) -> UserORM:
-    """创建用户"""
+    """创建用户（多租户：继承创建者 tenant_id；username 全局唯一——登录不带租户参数）"""
     async with get_db_session() as session:
         exists = await session.execute(select(UserORM).where(UserORM.username == username))
         if exists.scalar_one_or_none():
@@ -168,10 +169,11 @@ async def create_user(
             role=role,
             im_accounts=im_accounts or {},
             status="active",
+            tenant_id=tenant_id,
         )
         session.add(user)
         await session.flush()
-        log.info("User created: {} ({})", user.username, user.role)
+        log.info("User created: {} ({}) tenant={}", user.username, user.role, tenant_id)
         return user
 
 
@@ -180,10 +182,11 @@ async def list_users(
     page_size: int = 20,
     keyword: str = "",
     role: str = "",
+    tenant_id: str = "default",
 ) -> tuple[list[UserORM], int]:
-    """分页查询用户"""
+    """分页查询用户（多租户：仅返回本租户用户）"""
     async with get_db_session() as session:
-        stmt = select(UserORM)
+        stmt = select(UserORM).where(UserORM.tenant_id == tenant_id)
         if keyword:
             stmt = stmt.where(UserORM.username.ilike(f"%{keyword}%"))
         if role:
@@ -201,12 +204,19 @@ async def update_user(
     role: Optional[str] = None,
     im_accounts: Optional[dict] = None,
     status_: Optional[str] = None,
+    tenant_id: str = "default",
+    operator_id: str = "",
 ) -> UserORM:
-    """更新用户"""
+    """更新用户（多租户：目标用户须同租户，否则 404 不泄漏存在性；防自锁：不能禁用/降级自己）"""
     async with get_db_session() as session:
         user = await session.get(UserORM, user_id)
-        if user is None:
+        if user is None or user.tenant_id != tenant_id:
             raise AppError(ErrorCode.RESOURCE_NOT_FOUND, "用户不存在", 404)
+        if operator_id and user.id == operator_id:
+            if status_ and status_ != "active":
+                raise AppError(ErrorCode.VALIDATION_ERROR, "不能禁用自己的账号", 400)
+            if role and role != user.role:
+                raise AppError(ErrorCode.VALIDATION_ERROR, "不能修改自己的角色", 400)
         if password:
             user.password_hash = hash_password(password)
         if role:

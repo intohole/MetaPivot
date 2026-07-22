@@ -60,7 +60,7 @@ async def record_task_to_workflow(task_id: str, user_id: str = "") -> dict:
     valid_steps = 0
     step_records = []  # 保存有效步骤信息供 LLM 增强
     for i, step in enumerate(steps):
-        skill_id = await skill_service.find_skill_id_by_name(step.tool_name)
+        skill_id = await skill_service.find_skill_id_by_name(step.tool_name, tenant_id=task.tenant_id)
         if not skill_id:
             log.warning("skip step {}: skill {} not found", i, step.tool_name)
             continue
@@ -94,6 +94,7 @@ async def record_task_to_workflow(task_id: str, user_id: str = "") -> dict:
         wf = WorkflowORM(
             name=wf_name, description=wf_desc,
             definition=definition, enabled=True, created_by=user_id or None,
+            tenant_id=task.tenant_id,
         )
         session.add(wf)
         await session.flush()
@@ -209,11 +210,12 @@ def _apply_variables(definition: dict, variables: list[dict]) -> dict:
 async def create_skill_from_workflow(
     workflow_id: str, name: str, description: str,
     owner_id: str = "", tags: Optional[list] = None,
+    tenant_id: str = "default",
 ) -> dict:
-    """从现有 workflow 快捷创建 source_type=workflow 的 skill"""
+    """从现有 workflow 快捷创建 source_type=workflow 的 skill（tenant_id 多租户隔离）"""
     from app.service.skill_service import skill_service
     from app.service.workflow_service import workflow_service
-    await workflow_service.get_workflow(workflow_id)  # 校验 workflow 存在
+    await workflow_service.get_workflow(workflow_id, tenant_id=tenant_id)  # 校验 workflow 存在且同租户
     data = {
         "name": name, "description": description,
         "input_schema": {"type": "object", "properties": {}},
@@ -221,20 +223,22 @@ async def create_skill_from_workflow(
         "permission": "user", "require_confirm": False,
         "tags": tags or [],
     }
-    return await skill_service.create_skill(data, owner_id=owner_id)
+    return await skill_service.create_skill(data, owner_id=owner_id, tenant_id=tenant_id)
 
 
 async def record_task_to_skill(
     task_id: str, name: str, description: str,
     owner_id: str = "", tags: Optional[list] = None,
+    tenant_id: str = "default",
 ) -> dict:
     """从 agent 任务录制 workflow + 创建 skill（一键沉淀）
 
     组合 record_task_to_workflow + create_skill_from_workflow。
+    录制的 workflow 继承任务租户（record_task_to_workflow 内部处理），skill 用传入 tenant_id。
     """
     rec = await record_task_to_workflow(task_id, user_id=owner_id)
     return await create_skill_from_workflow(
-        rec["workflow_id"], name, description, owner_id=owner_id, tags=tags,
+        rec["workflow_id"], name, description, owner_id=owner_id, tags=tags, tenant_id=tenant_id,
     )
 
 

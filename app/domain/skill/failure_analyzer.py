@@ -94,6 +94,7 @@ async def analyze_failure(task_id: str) -> dict:
         draft_data=draft_data,
         root_cause=root_cause,
         advice=result.get("avoidance_advice", ""),
+        tenant_id=task.tenant_id,
     )
 
     return {
@@ -105,8 +106,9 @@ async def analyze_failure(task_id: str) -> dict:
 
 async def _create_avoidance_draft(
     task_id: str, draft_data: dict, root_cause: str, advice: str,
+    tenant_id: str = "default",
 ) -> str:
-    """持久化避坑Skill草稿到 SkillDraftORM"""
+    """持久化避坑Skill草稿到 SkillDraftORM（tenant_id 落来源任务租户）"""
     name = draft_data.get("name", f"避坑-{task_id[:8]}")
     # 避免重名：追加 task_id 前缀
     if not name.startswith("避坑-"):
@@ -128,6 +130,7 @@ async def _create_avoidance_draft(
             origin="failure_analyzer",
             task_id=task_id,
             status="pending",
+            tenant_id=tenant_id,
         )
         session.add(draft)
         await session.flush()

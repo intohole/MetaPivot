@@ -50,6 +50,7 @@ async def chat(
         user_id=body.user_id or user.user_id,
         context=body.context,
         stream=body.stream,
+        tenant_id=user.tenant_id,
     )
     if body.stream:
         return EventSourceResponse(agent_service.stream_task(result["task_id"]))

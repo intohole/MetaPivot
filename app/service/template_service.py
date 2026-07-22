@@ -110,11 +110,13 @@ class TemplateService:
         name: str = "",
         trigger_overrides: Optional[dict] = None,
         user_id: str = "",
+        tenant_id: str = "default",
     ) -> dict:
         """基于模板创建工作流实例
 
         trigger_overrides: 覆盖模板的 trigger_template（如用户自定义 cron_expr / webhook）
         注：工作流输入参数在执行时通过 POST /workflows/{id}/execute 提供，创建时不持久化默认输入。
+        tenant_id: 实例化产出的工作流归属实例化者租户（模板本身跨租户共享）。
         """
         tpl = await self.get_template(template_id)
 
@@ -134,6 +136,7 @@ class TemplateService:
                 trigger=trigger_final,
                 enabled=True,
                 created_by=user_id or None,
+                tenant_id=tenant_id,
             )
             session.add(wf)
             # 模板使用计数 +1：原子 UPDATE 避免并发丢更新（read-modify-write 竞态）

@@ -21,7 +21,8 @@ async def list_drafts(
     user: CurrentUser = Depends(require_permission("skill:read")),
 ):
     from app.domain.skill.evolution import list_drafts as _impl
-    items, total = await _impl(status=status, owner_id="", page=pg.page, page_size=pg.page_size)
+    items, total = await _impl(
+        status=status, owner_id="", page=pg.page, page_size=pg.page_size, tenant_id=user.tenant_id)
     return ok(paginate(items, total, pg.page, pg.page_size), request)
 
 
@@ -32,7 +33,7 @@ async def approve_draft(
     user: CurrentUser = Depends(require_permission("skill:manage")),
 ):
     from app.domain.skill.evolution import approve_draft as _impl
-    return ok(await _impl(draft_id, user_id=user.user_id), request)
+    return ok(await _impl(draft_id, user_id=user.user_id, tenant_id=user.tenant_id), request)
 
 
 @router.post("/drafts/{draft_id}/reject", summary="拒绝草稿")
@@ -42,7 +43,7 @@ async def reject_draft(
     user: CurrentUser = Depends(require_permission("skill:manage")),
 ):
     from app.domain.skill.evolution import reject_draft as _impl
-    return ok(await _impl(draft_id, user_id=user.user_id), request)
+    return ok(await _impl(draft_id, user_id=user.user_id, tenant_id=user.tenant_id), request)
 
 
 # ============ Skill 自进化：修订 Review ============
@@ -56,7 +57,9 @@ async def list_revisions(
     user: CurrentUser = Depends(require_permission("skill:read")),
 ):
     from app.domain.skill.evolution import list_revisions as _impl
-    items, total = await _impl(skill_id=skill_id, status=status, page=pg.page, page_size=pg.page_size)
+    items, total = await _impl(
+        skill_id=skill_id, status=status, page=pg.page, page_size=pg.page_size,
+        tenant_id=user.tenant_id)
     return ok(paginate(items, total, pg.page, pg.page_size), request)
 
 
@@ -67,7 +70,7 @@ async def approve_revision(
     user: CurrentUser = Depends(require_permission("skill:manage")),
 ):
     from app.domain.skill.evolution import approve_revision as _impl
-    return ok(await _impl(revision_id, user_id=user.user_id), request)
+    return ok(await _impl(revision_id, user_id=user.user_id, tenant_id=user.tenant_id), request)
 
 
 @router.post("/revisions/{revision_id}/reject", summary="拒绝修订")
@@ -77,4 +80,4 @@ async def reject_revision(
     user: CurrentUser = Depends(require_permission("skill:manage")),
 ):
     from app.domain.skill.evolution import reject_revision as _impl
-    return ok(await _impl(revision_id, user_id=user.user_id), request)
+    return ok(await _impl(revision_id, user_id=user.user_id, tenant_id=user.tenant_id), request)

@@ -100,6 +100,7 @@ async def instantiate_template(
         name=body.name,
         trigger_overrides=body.trigger_overrides,
         user_id=user.user_id,
+        tenant_id=user.tenant_id,
     ), request)
 
 
@@ -121,7 +122,7 @@ async def create_workflow(
 ):
     from app.service.workflow_service import workflow_service
     return ok(await workflow_service.create_workflow(
-        body.model_dump(), created_by=user.user_id
+        body.model_dump(), created_by=user.user_id, tenant_id=user.tenant_id
     ), request)
 
 
@@ -145,7 +146,7 @@ async def get_workflow(
     user: CurrentUser = Depends(require_permission("workflow:read")),
 ):
     from app.service.workflow_service import workflow_service
-    return ok(_workflow_dict(await workflow_service.get_workflow(workflow_id)), request)
+    return ok(_workflow_dict(await workflow_service.get_workflow(workflow_id, tenant_id=user.tenant_id)), request)
 
 
 @router.put("/{workflow_id}", summary="更新工作流")
@@ -157,7 +158,7 @@ async def update_workflow(
 ):
     from app.service.workflow_service import workflow_service
     update_data = {k: v for k, v in body.model_dump().items() if v is not None}
-    return ok(await workflow_service.update_workflow(workflow_id, update_data), request)
+    return ok(await workflow_service.update_workflow(workflow_id, update_data, tenant_id=user.tenant_id), request)
 
 
 @router.delete("/{workflow_id}", summary="删除工作流")
@@ -167,7 +168,7 @@ async def delete_workflow(
     user: CurrentUser = Depends(require_permission("workflow:manage")),
 ):
     from app.service.workflow_service import workflow_service
-    return ok(await workflow_service.delete_workflow(workflow_id), request)
+    return ok(await workflow_service.delete_workflow(workflow_id, tenant_id=user.tenant_id), request)
 
 
 @router.post("/{workflow_id}/execute", status_code=202, summary="执行工作流")
@@ -183,6 +184,7 @@ async def execute_workflow(
         inputs=body.inputs,
         chat_id=body.chat_id,
         user_id=body.user_id or user.user_id,
+        tenant_id=user.tenant_id,
     ), request)
 
 
@@ -193,7 +195,7 @@ async def get_execution(
     user: CurrentUser = Depends(require_permission("workflow:read")),
 ):
     from app.service.workflow_service import workflow_service
-    return ok(await workflow_service.get_execution(execution_id), request)
+    return ok(await workflow_service.get_execution(execution_id, tenant_id=user.tenant_id), request)
 
 
 class ResumeRequest(BaseModel):
@@ -221,6 +223,7 @@ async def resume_workflow_execution(
         execution_id=execution_id,
         decision=body.decision,
         modifications=body.modifications or {},
+        tenant_id=user.tenant_id,
     ), request)
 
 

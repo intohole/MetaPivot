@@ -44,6 +44,7 @@ async def scheduler_node(state: AgentState) -> dict:
             channel=state.channel,
             context={"original_request": state.original_message},
             description=description,
+            tenant_id=state.tenant_id,
         )
         # 构造用户可读的回复
         if cron_expr:

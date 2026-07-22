@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, Boolean, Float, Integer, String, Text, func
+from sqlalchemy import JSON, Boolean, Float, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infra.db.session import Base
@@ -32,9 +32,11 @@ class UserORM(Base):
 class SkillORM(Base):
     """Skill注册表"""
     __tablename__ = "skills"
+    # Sprint 13: 名称租户内唯一（多租户 SaaS 终局：不同企业可同名 Skill，如"日报生成"）
+    __table_args__ = (UniqueConstraint("name", "tenant_id", name="uq_skills_name_tenant"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
-    name: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     input_schema: Mapped[dict] = mapped_column(JSON, nullable=False)
     source_type: Mapped[str] = mapped_column(String(20), nullable=False)  # mcp/function/workflow
@@ -126,4 +128,6 @@ class SkillDraftORM(Base):
     task_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)  # 来源任务
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False, index=True)  # pending/approved/rejected
     owner_id: Mapped[Optional[str]] = mapped_column(String(36), default=None)
+    # 多租户隔离（Sprint 13：草稿审批后转为正式 Skill 须落回来源租户）
+    tenant_id: Mapped[str] = mapped_column(String(36), default="default", nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)

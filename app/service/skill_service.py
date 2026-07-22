@@ -67,19 +67,21 @@ class SkillService:
     # 工具名黑名单前缀（避免 LLM 误调用内部工具）
     _RESERVED_PREFIX = "_"
 
-    async def create_skill(self, data: dict, owner_id: str = "") -> dict:
-        """创建 Skill（Phase 3: owner_id 注入创建者）"""
+    async def create_skill(self, data: dict, owner_id: str = "", tenant_id: str = "default") -> dict:
+        """创建 Skill（Phase 3: owner_id 注入创建者；Sprint 13: 名称租户内唯一 + tenant_id 隔离）"""
         async with get_db_session() as session:
-            exists = await session.execute(select(SkillORM).where(SkillORM.name == data["name"]))
+            exists = await session.execute(select(SkillORM).where(
+                SkillORM.name == data["name"], SkillORM.tenant_id == tenant_id))
             if exists.scalar_one_or_none():
                 raise AppError(ErrorCode.VALIDATION_ERROR, "Skill 名称已存在", 409)
             self._validate(data)
             skill = SkillORM(**data)
+            skill.tenant_id = tenant_id
             if owner_id:
                 skill.owner_id = owner_id
             session.add(skill)
             await session.flush()
-            log.info("Skill created: {} ({})", skill.name, skill.source_type)
+            log.info("Skill created: {} ({}) tenant={}", skill.name, skill.source_type, tenant_id)
             return self._to_dict(skill)
 
     async def list_skills(
@@ -112,17 +114,18 @@ class SkillService:
             items = (await session.execute(stmt)).scalars().all()
             return items, total
 
-    async def get_skill(self, skill_id: str) -> SkillORM:
+    async def get_skill(self, skill_id: str, tenant_id: str = "") -> SkillORM:
+        """获取 Skill（tenant_id 非空时强制归属校验，404 不泄漏存在性；空串为内部可信路径）"""
         async with get_db_session() as session:
             skill = await session.get(SkillORM, skill_id)
-            if skill is None:
+            if skill is None or (tenant_id and skill.tenant_id != tenant_id):
                 raise AppError(ErrorCode.SKILL_NOT_FOUND, status_code=404)
             return skill
 
-    async def update_skill(self, skill_id: str, update_data: dict) -> dict:
+    async def update_skill(self, skill_id: str, update_data: dict, tenant_id: str = "") -> dict:
         async with get_db_session() as session:
             skill = await session.get(SkillORM, skill_id)
-            if skill is None:
+            if skill is None or (tenant_id and skill.tenant_id != tenant_id):
                 raise AppError(ErrorCode.SKILL_NOT_FOUND, status_code=404)
             for k, v in update_data.items():
                 if hasattr(skill, k) and v is not None:
@@ -132,28 +135,28 @@ class SkillService:
             await session.refresh(skill)
             return {"id": skill.id, "updated_at": skill.updated_at.isoformat() if skill.updated_at else None}
 
-    async def delete_skill(self, skill_id: str) -> dict:
+    async def delete_skill(self, skill_id: str, tenant_id: str = "") -> dict:
         async with get_db_session() as session:
             skill = await session.get(SkillORM, skill_id)
-            if skill is None:
+            if skill is None or (tenant_id and skill.tenant_id != tenant_id):
                 raise AppError(ErrorCode.SKILL_NOT_FOUND, status_code=404)
             await session.delete(skill)
             return {"id": skill_id, "deleted": True}
 
-    async def set_enabled(self, skill_id: str, enabled: bool) -> dict:
+    async def set_enabled(self, skill_id: str, enabled: bool, tenant_id: str = "") -> dict:
         async with get_db_session() as session:
             skill = await session.get(SkillORM, skill_id)
-            if skill is None:
+            if skill is None or (tenant_id and skill.tenant_id != tenant_id):
                 raise AppError(ErrorCode.SKILL_NOT_FOUND, status_code=404)
             skill.enabled = enabled
             await session.flush()
             return {"id": skill.id, "enabled": skill.enabled}
 
-    async def publish_to_team(self, skill_id: str, user_id: str) -> dict:
+    async def publish_to_team(self, skill_id: str, user_id: str, tenant_id: str = "") -> dict:
         """Phase 3: 个人 skill 发布为团队 shared（private→shared, version+1, changelog 追加）"""
         async with get_db_session() as session:
             skill = await session.get(SkillORM, skill_id)
-            if skill is None:
+            if skill is None or (tenant_id and skill.tenant_id != tenant_id):
                 raise AppError(ErrorCode.SKILL_NOT_FOUND, status_code=404)
             if skill.owner_id and skill.owner_id != user_id:
                 raise AppError(ErrorCode.AUTH_PERMISSION_DENIED, "仅 owner 可发布", 403)
@@ -167,20 +170,20 @@ class SkillService:
             log.info("Skill published to team: {} v{}", skill.name, skill.version)
             return {"id": skill.id, "visibility": "shared", "version": skill.version}
 
-    async def create_skill_from_workflow(self, workflow_id, name, description, owner_id="", tags=None):
+    async def create_skill_from_workflow(self, workflow_id, name, description, owner_id="", tags=None, tenant_id: str = "default"):
         from app.domain.skill.recorder import create_skill_from_workflow as _impl
-        return await _impl(workflow_id, name, description, owner_id, tags)
+        return await _impl(workflow_id, name, description, owner_id, tags, tenant_id=tenant_id)
 
-    async def record_task_to_skill(self, task_id, name, description, owner_id="", tags=None):
+    async def record_task_to_skill(self, task_id, name, description, owner_id="", tags=None, tenant_id: str = "default"):
         from app.domain.skill.recorder import record_task_to_skill as _impl
-        return await _impl(task_id, name, description, owner_id, tags)
+        return await _impl(task_id, name, description, owner_id, tags, tenant_id=tenant_id)
 
     # ============ 执行（Sprint 8.1: 委托给 skill_executor） ============
 
-    async def execute(self, skill_id: str, args: dict, user_id: str = "") -> dict:
-        """执行 Skill，按 source_type 路由（委托给 skill_executor.execute）"""
+    async def execute(self, skill_id: str, args: dict, user_id: str = "", tenant_id: str = "default") -> dict:
+        """执行 Skill，按 source_type 路由（委托给 skill_executor.execute；tenant_id 归属校验+审计隔离）"""
         from app.service.skill_executor import execute as _execute
-        return await _execute(self, skill_id, args, user_id)
+        return await _execute(self, skill_id, args, user_id, tenant_id=tenant_id)
 
     async def test_skill(self, skill_id: str, args: dict) -> dict:
         """测试 Skill（不写审计、不增加 call_count，用于管理后台）"""
@@ -189,13 +192,15 @@ class SkillService:
 
     # ============ Agent 工具列表 ============
 
-    async def list_tools_for_llm(self, permission: str = "user") -> list[dict]:
+    async def list_tools_for_llm(self, permission: str = "user", tenant_id: str = "") -> list[dict]:
         """生成 LLM tools 列表（OpenAI Function Call 格式）
 
-        仅返回 enabled 且权限匹配的 Skill。
+        仅返回 enabled 且权限匹配的 Skill。tenant_id 非空时按租户隔离（Agent 域传入任务租户）。
         """
         async with get_db_session() as session:
             stmt = select(SkillORM).where(SkillORM.enabled == True)  # noqa: E712
+            if tenant_id:
+                stmt = stmt.where(SkillORM.tenant_id == tenant_id)
             skills = (await session.execute(stmt)).scalars().all()
 
         tools: list[dict] = []
@@ -219,9 +224,11 @@ class SkillService:
             })
         return tools
 
-    async def find_skill_id_by_name(self, name: str) -> Optional[str]:
+    async def find_skill_id_by_name(self, name: str, tenant_id: str = "") -> Optional[str]:
         async with get_db_session() as session:
             stmt = select(SkillORM.id).where(SkillORM.name == name, SkillORM.enabled == True)  # noqa: E712
+            if tenant_id:
+                stmt = stmt.where(SkillORM.tenant_id == tenant_id)
             return (await session.execute(stmt)).scalar_one_or_none()
 
     # ============ 内部工具 ============

@@ -96,8 +96,9 @@ class AgentService:
         user_id: str,
         context: dict,
         stream: bool = False,
+        tenant_id: str = "default",
     ) -> dict:
-        """启动 Agent 任务，立即返回 task_id（异步执行，不阻塞）"""
+        """启动 Agent 任务，立即返回 task_id（异步执行，不阻塞；tenant_id 多租户隔离）"""
         _ = stream  # API 兼容参数
         rid = get_request_id() or f"task-{uuid4().hex[:8]}"
         tid = get_trace_id() or rid
@@ -112,6 +113,7 @@ class AgentService:
                 status="pending",
                 request_id=rid,
                 trace_id=tid,
+                tenant_id=tenant_id,
             )
             session.add(task_orm)
             await session.flush()
@@ -119,7 +121,7 @@ class AgentService:
 
         # Sprint 7.4: 执行逻辑委托给 agent_runner
         from app.service.agent_runner import run_task
-        bg = asyncio.create_task(run_task(self, task_id, message, channel, chat_id, user_id, context))
+        bg = asyncio.create_task(run_task(self, task_id, message, channel, chat_id, user_id, context, tenant_id=tenant_id))
         self._running_tasks[task_id] = bg
         bg.add_done_callback(lambda t: self._running_tasks.pop(task_id, None))
 
@@ -146,11 +148,12 @@ class AgentService:
         user_id: str = "",
         context: dict = None,
         timeout: int = 120,
+        tenant_id: str = "default",
     ) -> dict:
-        """启动 Agent 任务并同步等待结果（工作流 agent_call 节点用）"""
+        """启动 Agent 任务并同步等待结果（工作流 agent_call 节点用；tenant_id 由工作流上下文传播）"""
         result = await self.start_task(
             message=message, channel=channel, chat_id=chat_id,
-            user_id=user_id, context=context or {},
+            user_id=user_id, context=context or {}, tenant_id=tenant_id,
         )
         task_id = result["task_id"]
         deadline = asyncio.get_event_loop().time() + timeout
@@ -218,12 +221,13 @@ class AgentService:
 
         # Sprint 7.4: 恢复逻辑委托给 agent_runner
         from app.service.agent_runner import resume_task
-        bg = asyncio.create_task(resume_task(self, task_id, state))
+        bg = asyncio.create_task(resume_task(self, task_id, state, tenant_id=task.tenant_id))
         self._running_tasks[task_id] = bg
         bg.add_done_callback(lambda t: self._running_tasks.pop(task_id, None))
         await audit_task_event(
             task_id, user_id, "agent.task.confirm",
             {"decision": decision, "modifications": modifications}, request_id=get_request_id(),
+            tenant_id=task.tenant_id,
         )
         return {"task_id": task_id, "status": "executing"}
 
@@ -252,6 +256,7 @@ class AgentService:
         await audit_task_event(
             task_id, user_id, "agent.task.cancel",
             {"message": task.original_message}, status="cancelled", request_id=get_request_id(),
+            tenant_id=task.tenant_id,
         )
         return {"task_id": task_id, "status": "cancelled"}
 

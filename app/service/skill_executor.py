@@ -22,15 +22,16 @@ if TYPE_CHECKING:
 log = get_logger("skill_executor")
 
 
-async def execute(svc: "SkillService", skill_id: str, args: dict, user_id: str = "") -> dict:
+async def execute(svc: "SkillService", skill_id: str, args: dict, user_id: str = "", tenant_id: str = "default") -> dict:
     """执行 Skill，按 source_type 路由
 
     Sprint 8.1: 从 SkillService.execute 迁移为模块级函数。
+    Sprint 13: tenant_id 用于归属校验 + 审计隔离。
     """
     import asyncio
     from app.service.skill_service import _safe_args_summary, _record_execution_safe
 
-    skill = await svc.get_skill(skill_id)
+    skill = await svc.get_skill(skill_id, tenant_id=tenant_id)
     if not skill.enabled:
         raise AppError(ErrorCode.SKILL_DISABLED, status_code=403)
 
@@ -68,7 +69,7 @@ async def execute(svc: "SkillService", skill_id: str, args: dict, user_id: str =
     await audit_service.log_action(
         user_id=user_id, action="skill.call", skill_id=skill_id,
         input_data=args, output_data=result, duration_ms=duration,
-        status=skill_status,
+        status=skill_status, tenant_id=tenant_id,
     )
     record_skill_call(skill.name, skill_status)
     # Skill 自进化：记录执行结果供 optimizer 分析（fire-and-forget）

@@ -30,7 +30,7 @@ class WorkflowService:
 
     # ============ CRUD ============
 
-    async def create_workflow(self, data: dict, created_by: str = "") -> dict:
+    async def create_workflow(self, data: dict, created_by: str = "", tenant_id: str = "default") -> dict:
         WorkflowDefinition(data["definition"])
         from app.domain.workflow.trigger_spec import parse_trigger
         trigger_spec = parse_trigger(data.get("trigger"))
@@ -41,6 +41,7 @@ class WorkflowService:
                 name=data["name"], description=data.get("description", ""),
                 definition=data["definition"], trigger=trigger_dict,
                 enabled=data.get("enabled", True), created_by=created_by or None,
+                tenant_id=tenant_id,
             )
             session.add(wf)
             await session.flush()
@@ -84,17 +85,18 @@ class WorkflowService:
             items = (await session.execute(stmt)).scalars().all()
             return items, total
 
-    async def get_workflow(self, workflow_id: str) -> WorkflowORM:
+    async def get_workflow(self, workflow_id: str, tenant_id: str = "") -> WorkflowORM:
+        """获取工作流（tenant_id 非空时强制归属校验，404 不泄漏存在性；空串为内部可信路径）"""
         async with get_db_session() as session:
             wf = await session.get(WorkflowORM, workflow_id)
-            if wf is None:
+            if wf is None or (tenant_id and wf.tenant_id != tenant_id):
                 raise AppError(ErrorCode.WORKFLOW_NOT_FOUND, status_code=404)
             return wf
 
-    async def update_workflow(self, workflow_id: str, update_data: dict) -> dict:
+    async def update_workflow(self, workflow_id: str, update_data: dict, tenant_id: str = "") -> dict:
         async with get_db_session() as session:
             wf = await session.get(WorkflowORM, workflow_id)
-            if wf is None:
+            if wf is None or (tenant_id and wf.tenant_id != tenant_id):
                 raise AppError(ErrorCode.WORKFLOW_NOT_FOUND, status_code=404)
             if "definition" in update_data:
                 WorkflowDefinition(update_data["definition"])
@@ -111,10 +113,10 @@ class WorkflowService:
             await session.refresh(wf)
             return {"id": wf.id, "updated_at": wf.updated_at.isoformat() if wf.updated_at else None}
 
-    async def delete_workflow(self, workflow_id: str) -> dict:
+    async def delete_workflow(self, workflow_id: str, tenant_id: str = "") -> dict:
         async with get_db_session() as session:
             wf = await session.get(WorkflowORM, workflow_id)
-            if wf is None:
+            if wf is None or (tenant_id and wf.tenant_id != tenant_id):
                 raise AppError(ErrorCode.WORKFLOW_NOT_FOUND, status_code=404)
             await session.delete(wf)
             return {"id": workflow_id, "deleted": True}
@@ -128,9 +130,13 @@ class WorkflowService:
         chat_id: str = "",
         user_id: str = "",
         exec_stack: Optional[list] = None,
+        tenant_id: str = "",
     ) -> dict:
-        """触发工作流执行（异步推进 DAG）。exec_stack 用于 Phase 2 循环检测。"""
-        wf = await self.get_workflow(workflow_id)
+        """触发工作流执行（异步推进 DAG）。exec_stack 用于 Phase 2 循环检测。
+
+        tenant_id 非空时强制归属校验（HTTP 路径）；审计租户以工作流记录为准（权威来源）。
+        """
+        wf = await self.get_workflow(workflow_id, tenant_id=tenant_id)
         if not wf.enabled:
             raise AppError(ErrorCode.WORKFLOW_INVALID, "工作流已禁用", 400)
 
@@ -149,17 +155,22 @@ class WorkflowService:
         import asyncio
         bg = asyncio.create_task(run_execution(
             self, execution_id, wf.definition, inputs, chat_id, user_id,
-            workflow_id=workflow_id, exec_stack=exec_stack,
+            workflow_id=workflow_id, exec_stack=exec_stack, tenant_id=wf.tenant_id,
         ))
         self._running_tasks[execution_id] = bg
         bg.add_done_callback(lambda t: self._running_tasks.pop(execution_id, None))
         return {"execution_id": execution_id, "status": "pending"}
 
-    async def get_execution(self, execution_id: str) -> dict:
+    async def get_execution(self, execution_id: str, tenant_id: str = "") -> dict:
+        """查询执行实例（tenant_id 非空时经工作流归属校验，404 不泄漏存在性）"""
         async with get_db_session() as session:
             ex = await session.get(WorkflowExecutionORM, execution_id)
             if ex is None:
                 raise AppError(ErrorCode.RESOURCE_NOT_FOUND, "执行实例不存在", 404)
+            if tenant_id:
+                wf = await session.get(WorkflowORM, ex.workflow_id)
+                if wf is None or wf.tenant_id != tenant_id:
+                    raise AppError(ErrorCode.RESOURCE_NOT_FOUND, "执行实例不存在", 404)
             return {
                 "execution_id": ex.id, "workflow_id": ex.workflow_id,
                 "status": ex.status, "current_node": ex.current_node,
@@ -169,14 +180,17 @@ class WorkflowService:
                 "error": ex.error,
             }
 
-    async def resume_execution(self, execution_id: str, decision: str, modifications: dict) -> dict:
-        """HITL 恢复执行"""
+    async def resume_execution(self, execution_id: str, decision: str, modifications: dict, tenant_id: str = "") -> dict:
+        """HITL 恢复执行（tenant_id 非空时经工作流归属校验，404 不泄漏存在性）"""
         async with get_db_session() as session:
             ex = await session.get(WorkflowExecutionORM, execution_id)
             if ex is None:
                 raise AppError(ErrorCode.RESOURCE_NOT_FOUND, "执行实例不存在", 404)
-            if ex.status != "paused":
-                raise AppError(ErrorCode.WORKFLOW_INVALID, "执行未暂停", 400)
+
+        # 先租户归属校验（防跨租户探测执行状态），再校验执行状态
+        wf = await self.get_workflow(ex.workflow_id, tenant_id=tenant_id)
+        if ex.status != "paused":
+            raise AppError(ErrorCode.WORKFLOW_INVALID, "执行未暂停", 400)
 
         # Sprint 8.1: 委托到 workflow_runner.update_execution
         from app.service.workflow_runner import run_execution, update_execution
@@ -184,13 +198,11 @@ class WorkflowService:
             await update_execution(execution_id, status="cancelled", error={"reason": "user_rejected"})
             return {"execution_id": execution_id, "status": "cancelled"}
 
-        # 恢复：重新加载工作流定义并从当前节点继续
-        wf = await self.get_workflow(ex.workflow_id)
         import asyncio
         bg = asyncio.create_task(run_execution(
             self, execution_id, wf.definition, ex.inputs, ex.chat_id or "", ex.triggered_by or "",
             resume_from=ex.current_node, context_mod=modifications,
-            workflow_id=ex.workflow_id,
+            workflow_id=ex.workflow_id, tenant_id=wf.tenant_id,
         ))
         self._running_tasks[execution_id] = bg
         bg.add_done_callback(lambda t: self._running_tasks.pop(execution_id, None))

@@ -34,6 +34,7 @@ async def execute_one(
     context: dict,
     recurring: str,
     cron_expr: Optional[str],
+    tenant_id: str = "default",
 ) -> None:
     """执行单个定时任务（调用 AgentService）
 
@@ -50,7 +51,7 @@ async def execute_one(
             agent_service.start_task(
                 message=message, channel=channel,
                 chat_id=chat_id or "", user_id=user_id or "",
-                context=context or {}, stream=False,
+                context=context or {}, stream=False, tenant_id=tenant_id,
             ),
             timeout=_TRIGGER_TIMEOUT,
         )

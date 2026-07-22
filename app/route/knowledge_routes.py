@@ -15,7 +15,7 @@ async def upload_document(
     user: CurrentUser = Depends(require_permission("knowledge:write")),
 ):
     from app.service.knowledge_service import knowledge_service
-    result = await knowledge_service.upload_document(file, metadata, user.user_id)
+    result = await knowledge_service.upload_document(file, metadata, user.user_id, tenant_id=user.tenant_id)
     return ok(result, request)
 
 
@@ -38,7 +38,7 @@ async def delete_document(
     user: CurrentUser = Depends(require_permission("knowledge:write")),
 ):
     from app.service.knowledge_service import knowledge_service
-    return ok(await knowledge_service.delete_document(document_id), request)
+    return ok(await knowledge_service.delete_document(document_id, tenant_id=user.tenant_id), request)
 
 
 @router.post("/search", summary="知识库检索")

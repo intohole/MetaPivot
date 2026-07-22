@@ -65,6 +65,7 @@ async def run_task(
     chat_id: str,
     user_id: str,
     context: dict,
+    tenant_id: str = "default",
 ) -> None:
     """后台执行 Agent 状态机
 
@@ -113,6 +114,7 @@ async def run_task(
         original_message=message, context=context, max_steps=settings.llm_max_steps,
         messages=list(history_messages), started_at=started_at,
         request_id=request_id, trace_id=get_trace_id() or request_id,
+        tenant_id=tenant_id,
     )
     await persist_state(task_id, state)
 
@@ -136,7 +138,7 @@ async def run_task(
         stream_manager.mark_finished(task_id)
         agent_task_finished()
         record_agent_task(state.status.value, duration)
-        await audit_task_result(task_id, user_id, channel, message, state, started_at, request_id)
+        await audit_task_result(task_id, user_id, channel, message, state, started_at, request_id, tenant_id=tenant_id)
         asyncio.get_running_loop().call_later(300, stream_manager.cleanup, task_id)
         # Skill 自进化：任务完成后异步触发经验固化/失败分析
         asyncio.get_running_loop().create_task(_trigger_skill_evolution(task_id, state.status.value))
@@ -195,7 +197,7 @@ async def consume_agent(
         detach_user_baggage(baggage_token)
 
 
-async def resume_task(svc: "AgentService", task_id: str, state: AgentState) -> None:
+async def resume_task(svc: "AgentService", task_id: str, state: AgentState, tenant_id: str = "default") -> None:
     """恢复 HITL 暂停的任务（与 run_task 对称：wait_for 包裹 consume_agent）"""
     request_id = get_request_id() or f"resume-{uuid4().hex[:8]}"
     if not get_request_id():
@@ -222,6 +224,6 @@ async def resume_task(svc: "AgentService", task_id: str, state: AgentState) -> N
         stream_manager.mark_finished(task_id)
         agent_task_finished()
         record_agent_task(state.status.value, duration)
-        await audit_task_result(task_id, state.user_id, state.channel, state.original_message, state, started_at, request_id)
+        await audit_task_result(task_id, state.user_id, state.channel, state.original_message, state, started_at, request_id, tenant_id=tenant_id)
         # Skill 自进化：HITL 恢复完成后异步触发（与 run_task 对称）
         asyncio.get_running_loop().create_task(_trigger_skill_evolution(task_id, state.status.value))

@@ -49,7 +49,8 @@ async def exec_skill_call(config: dict, context: dict, user_id: str) -> dict:
     args = _resolve_vars(args, context)
     if not skill_id:
         return {"error": "skill_id 未配置"}
-    result = await skill_service.execute(skill_id, args, user_id=user_id)
+    result = await skill_service.execute(
+        skill_id, args, user_id=user_id, tenant_id=context.get("__tenant_id", "default"))
     context.setdefault("outputs", {})[skill_id] = result
     return result
 
@@ -158,6 +159,7 @@ async def exec_agent_call(config: dict, context: dict, chat_id: str, user_id: st
     result = await agent_service.start_task_and_wait(
         message=message, channel="workflow", chat_id=chat_id,
         user_id=user_id, context=agent_context, timeout=timeout,
+        tenant_id=context.get("__tenant_id", "default"),
     )
     context.setdefault("outputs", {})["agent_call"] = result
     return {"agent_result": result}
@@ -190,6 +192,7 @@ async def exec_sub_workflow(config: dict, context: dict, chat_id: str, user_id: 
     result = await workflow_service.execute_workflow(
         workflow_id=sub_id, inputs=sub_inputs, chat_id=chat_id, user_id=user_id,
         exec_stack=push_id(exec_stack, sub_id),
+        tenant_id=context.get("__tenant_id", "default"),
     )
     context.setdefault("outputs", {})["sub_workflow"] = result
     return {"sub_workflow_result": result}

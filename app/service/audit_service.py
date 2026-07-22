@@ -39,8 +39,9 @@ class AuditService:
         error_message: Optional[str] = None,
         ip_address: Optional[str] = None,
         request_id: str = "",
+        tenant_id: str = "default",
     ) -> None:
-        """记录审计日志（异步非阻塞，失败不影响主流程）"""
+        """记录审计日志（异步非阻塞，失败不影响主流程；tenant_id 多租户隔离）"""
         try:
             input_hash = sha256_hash(str(input_data)) if input_data else ""
             output_summary = self._summarize_output(output_data)
@@ -48,6 +49,7 @@ class AuditService:
                 session.add(AuditLogORM(
                     request_id=request_id or "",
                     user_id=user_id or None,
+                    tenant_id=tenant_id,
                     action=action,
                     skill_id=skill_id,
                     workflow_id=workflow_id,

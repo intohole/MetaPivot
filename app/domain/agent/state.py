@@ -62,6 +62,7 @@ class AgentState(BaseModel):
     user_id: str = ""
     channel: str = "api"
     chat_id: str = ""
+    tenant_id: str = "default"  # 多租户隔离上下文（Sprint 13：工具列表/Skill 解析按租户过滤）
 
     # 输入
     original_message: str = ""

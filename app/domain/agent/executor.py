@@ -134,6 +134,7 @@ async def execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
                 workflow_id=workflow_id, inputs=inputs,
                 chat_id=state.chat_id, user_id=state.user_id,
                 exec_stack=push_id(exec_stack, workflow_id),
+                tenant_id=state.tenant_id,
             )
             return StepRecord(
                 step_index=state.current_step, step_name="call_trigger_workflow",
@@ -151,7 +152,7 @@ async def execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
     if tool_name == "list_workflows":
         from app.service.workflow_service import workflow_service
         try:
-            items, _ = await workflow_service.list_workflows(enabled=True)
+            items, _ = await workflow_service.list_workflows(enabled=True, tenant_id=state.tenant_id)
             workflows = [{"id": w.id, "name": w.name, "description": w.description} for w in items]
             return StepRecord(
                 step_index=state.current_step, step_name="call_list_workflows",
@@ -172,7 +173,7 @@ async def execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
         tool_name=tool_name, tool_input=args, status="running",
     )
 
-    skill_id = await skill_service.find_skill_id_by_name(tool_name)
+    skill_id = await skill_service.find_skill_id_by_name(tool_name, tenant_id=state.tenant_id)
     if skill_id is None:
         step.status = "failed"
         step.error = f"Skill '{tool_name}' 不存在或未启用"
@@ -196,7 +197,7 @@ async def execute_tool_call(state: AgentState, tc: Any) -> StepRecord:
     last_error: Optional[Exception] = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
-            result = await skill_service.execute(skill_id, args, user_id=state.user_id)
+            result = await skill_service.execute(skill_id, args, user_id=state.user_id, tenant_id=state.tenant_id)
             break
         except Exception as e:
             last_error = e

@@ -92,6 +92,7 @@ class AsyncScheduler(IScheduler):
         channel: str = "api",
         context: Optional[dict] = None,
         description: str = "",
+        tenant_id: str = "default",
     ) -> int:
         """创建定时任务
 
@@ -126,6 +127,7 @@ class AsyncScheduler(IScheduler):
                 status="pending",
                 retry_count=0,
                 max_retries=_DEFAULT_MAX_RETRIES,
+                tenant_id=tenant_id,
             )
             session.add(task)
             await session.flush()
@@ -267,7 +269,7 @@ class AsyncScheduler(IScheduler):
         for t in tasks:
             asyncio.create_task(execute_one(
                 t.id, t.message, t.channel, t.chat_id, t.user_id,
-                t.context, t.recurring, t.cron_expr,
+                t.context, t.recurring, t.cron_expr, tenant_id=t.tenant_id,
             ))
 
     async def health(self) -> bool:

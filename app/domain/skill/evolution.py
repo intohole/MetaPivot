@@ -91,6 +91,7 @@ async def try_solidify_experience(task_id: str) -> dict:
     draft_id = await _create_draft(
         task_id=task_id, workflow_id=workflow_id,
         draft_data=draft_data, reusability=reusability,
+        tenant_id=task.tenant_id,
     )
     return {"solidified": True, "draft_id": draft_id, "reusability": reusability}
 
@@ -99,11 +100,14 @@ async def try_solidify_experience(task_id: str) -> dict:
 
 async def list_drafts(
     status: str = "pending", owner_id: str = "", page: int = 1, page_size: int = 20,
+    tenant_id: str = "",
 ) -> tuple[list, int]:
-    """列出 Skill 草稿（待审核/已批准/已拒绝）"""
+    """列出 Skill 草稿（待审核/已批准/已拒绝；tenant_id 非空时按租户过滤）"""
     from sqlalchemy import func
     async with get_db_session() as session:
         stmt = select(SkillDraftORM).where(SkillDraftORM.status == status)
+        if tenant_id:
+            stmt = stmt.where(SkillDraftORM.tenant_id == tenant_id)
         if owner_id:
             stmt = stmt.where(SkillDraftORM.owner_id == owner_id)
         count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -113,18 +117,19 @@ async def list_drafts(
     return [_draft_to_dict(d) for d in items], total
 
 
-async def approve_draft(draft_id: str, user_id: str = "") -> dict:
-    """批准草稿 → 转为正式 Skill"""
+async def approve_draft(draft_id: str, user_id: str = "", tenant_id: str = "") -> dict:
+    """批准草稿 → 转为正式 Skill（tenant_id 非空时强制归属校验；Skill 落草稿来源租户）"""
     async with get_db_session() as session:
         draft = await session.get(SkillDraftORM, draft_id)
-        if draft is None:
+        if draft is None or (tenant_id and draft.tenant_id != tenant_id):
             return {"approved": False, "reason": "draft_not_found"}
         if draft.status != "pending":
             return {"approved": False, "reason": "already_processed"}
 
-        # 名称冲突检查：避免 IntegrityError（skills.name 有 unique 约束）
+        # 名称冲突检查：避免 IntegrityError（skills (name, tenant_id) 复合唯一约束）
         existing = await session.execute(
-            select(SkillORM.id).where(SkillORM.name == draft.name)
+            select(SkillORM.id).where(
+                SkillORM.name == draft.name, SkillORM.tenant_id == draft.tenant_id)
         )
         if existing.scalar_one_or_none():
             return {"approved": False, "reason": "name_conflict",
@@ -134,7 +139,7 @@ async def approve_draft(draft_id: str, user_id: str = "") -> dict:
         # 允许审批但创建为 disabled 状态，用户配置 source_ref 后手动启用
         needs_source_ref = not draft.source_ref
 
-        # 创建正式 Skill
+        # 创建正式 Skill（落草稿来源租户）
         skill = SkillORM(
             name=draft.name, description=draft.description,
             input_schema=draft.input_schema, source_type=draft.source_type,
@@ -142,6 +147,7 @@ async def approve_draft(draft_id: str, user_id: str = "") -> dict:
             tags=draft.tags,
             owner_id=draft.owner_id or user_id or None,
             visibility="private", version=1, enabled=not needs_source_ref,
+            tenant_id=draft.tenant_id,
             changelog=[{"version": 1, "change": f"from draft({draft.origin})" + (" (disabled: source_ref未配置)" if needs_source_ref else ""), "at": datetime.now().isoformat()}],
         )
         session.add(skill)
@@ -152,11 +158,11 @@ async def approve_draft(draft_id: str, user_id: str = "") -> dict:
         return {"approved": True, "skill_id": skill.id}
 
 
-async def reject_draft(draft_id: str, user_id: str = "") -> dict:
-    """拒绝草稿"""
+async def reject_draft(draft_id: str, user_id: str = "", tenant_id: str = "") -> dict:
+    """拒绝草稿（tenant_id 非空时强制归属校验）"""
     async with get_db_session() as session:
         draft = await session.get(SkillDraftORM, draft_id)
-        if draft is None:
+        if draft is None or (tenant_id and draft.tenant_id != tenant_id):
             return {"rejected": False, "reason": "draft_not_found"}
         draft.status = "rejected"
         await session.flush()
@@ -166,11 +172,15 @@ async def reject_draft(draft_id: str, user_id: str = "") -> dict:
 
 async def list_revisions(
     skill_id: str = "", status: str = "", page: int = 1, page_size: int = 20,
+    tenant_id: str = "",
 ) -> tuple[list, int]:
-    """列出 Skill 修订记录（PR-like Review）"""
+    """列出 Skill 修订记录（PR-like Review；tenant_id 非空时 join SkillORM 按租户过滤）"""
     from sqlalchemy import func
     async with get_db_session() as session:
         stmt = select(SkillRevisionORM)
+        if tenant_id:
+            stmt = stmt.join(SkillORM, SkillRevisionORM.skill_id == SkillORM.id).where(
+                SkillORM.tenant_id == tenant_id)
         if skill_id:
             stmt = stmt.where(SkillRevisionORM.skill_id == skill_id)
         if status:
@@ -182,8 +192,8 @@ async def list_revisions(
     return [_revision_to_dict(r) for r in items], total
 
 
-async def approve_revision(revision_id: str, user_id: str = "") -> dict:
-    """批准修订 → 应用到 SkillORM"""
+async def approve_revision(revision_id: str, user_id: str = "", tenant_id: str = "") -> dict:
+    """批准修订 → 应用到 SkillORM（tenant_id 非空时强制 Skill 归属校验）"""
     async with get_db_session() as session:
         rev = await session.get(SkillRevisionORM, revision_id)
         if rev is None:
@@ -192,7 +202,7 @@ async def approve_revision(revision_id: str, user_id: str = "") -> dict:
             return {"approved": False, "reason": "already_processed"}
 
         skill = await session.get(SkillORM, rev.skill_id)
-        if skill is None:
+        if skill is None or (tenant_id and skill.tenant_id != tenant_id):
             return {"approved": False, "reason": "skill_not_found"}
 
         new_def = rev.new_definition
@@ -213,12 +223,16 @@ async def approve_revision(revision_id: str, user_id: str = "") -> dict:
         return {"approved": True, "skill_id": skill.id, "version": rev.version}
 
 
-async def reject_revision(revision_id: str, user_id: str = "") -> dict:
-    """拒绝修订"""
+async def reject_revision(revision_id: str, user_id: str = "", tenant_id: str = "") -> dict:
+    """拒绝修订（tenant_id 非空时强制 Skill 归属校验）"""
     async with get_db_session() as session:
         rev = await session.get(SkillRevisionORM, revision_id)
         if rev is None:
             return {"rejected": False, "reason": "revision_not_found"}
+        if tenant_id:
+            skill = await session.get(SkillORM, rev.skill_id)
+            if skill is None or skill.tenant_id != tenant_id:
+                return {"rejected": False, "reason": "revision_not_found"}
         rev.status = "rejected"
         rev.reviewed_by = user_id or None
         rev.reviewed_at = datetime.now()
@@ -230,8 +244,9 @@ async def reject_revision(revision_id: str, user_id: str = "") -> dict:
 
 async def _create_draft(
     task_id: str, workflow_id: str, draft_data: dict, reusability: str,
+    tenant_id: str = "default",
 ) -> str:
-    """持久化 Skill 草稿"""
+    """持久化 Skill 草稿（tenant_id 落来源任务租户，审批后 Skill 跟随）"""
     async with get_db_session() as session:
         draft = SkillDraftORM(
             name=draft_data.get("name", f"经验-{task_id[:8]}"),
@@ -242,6 +257,7 @@ async def _create_draft(
             confidence=float(draft_data.get("confidence", 0.5)),
             reasoning=draft_data.get("reasoning", ""),
             origin="reflector", task_id=task_id, status="pending",
+            tenant_id=tenant_id,
         )
         session.add(draft)
         await session.flush()
@@ -264,7 +280,8 @@ def _draft_to_dict(d: SkillDraftORM) -> dict:
         "input_schema": d.input_schema, "source_type": d.source_type,
         "source_ref": d.source_ref, "tags": d.tags, "confidence": d.confidence,
         "reasoning": d.reasoning, "origin": d.origin, "task_id": d.task_id,
-        "status": d.status, "created_at": d.created_at.isoformat() if d.created_at else None,
+        "status": d.status, "tenant_id": d.tenant_id,
+        "created_at": d.created_at.isoformat() if d.created_at else None,
     }
 
 
